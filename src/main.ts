@@ -59,7 +59,7 @@ interface LlrPostActionPassResult {
 }
 
 interface ApplyTaskResultOptions {
-    placeCursorAfterChecklist?: boolean;
+    placeCursorBeforeActualStart?: boolean;
 }
 
 const DEFAULT_SETTINGS: LlrSettings = {
@@ -1183,7 +1183,7 @@ export default class LlrPlugin extends Plugin {
         });
 
         await this.applyTaskResult(editor, view, targetLine, lineText, result, {
-            placeCursorAfterChecklist: this.shouldPlaceCursorAfterChecklist(lineText, result),
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
         });
         await this.runPostLlrActionAdjustments(editor, view, 'checkbox press');
         this.scheduleUIUpdate();
@@ -1890,7 +1890,7 @@ export default class LlrPlugin extends Plugin {
             || (!forceAction && lineText.trim().startsWith('- [ ]'));
 
         await this.applyTaskResult(editor, view, cursor.line, lineText, result, {
-            placeCursorAfterChecklist: this.shouldPlaceCursorAfterChecklist(lineText, result),
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
         });
         await this.runPostLlrActionAdjustments(editor, view, 'toggle task', {
             skipAtDoneLineIndexes: shouldSkipAtDoneOnCurrentLine ? new Set([cursor.line]) : undefined,
@@ -1933,7 +1933,7 @@ export default class LlrPlugin extends Plugin {
         });
         if (!result) return;
         await this.applyTaskResult(editor, view, cursor.line, lineText, result, {
-            placeCursorAfterChecklist: this.shouldPlaceCursorAfterChecklist(lineText, result),
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
         });
         await this.runPostLlrActionAdjustments(editor, view, 'start task from previous completion', {
             skipAtDoneLineIndexes: new Set([cursor.line]),
@@ -2259,7 +2259,7 @@ export default class LlrPlugin extends Plugin {
         editor.setCursor(previousLine, editor.getLine(previousLine).length);
     }
 
-    private shouldPlaceCursorAfterChecklist(
+    private shouldPlaceCursorBeforeActualStart(
         previousLineText: string,
         result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string }
     ): boolean {
@@ -2275,7 +2275,7 @@ export default class LlrPlugin extends Plugin {
         result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string },
         options: ApplyTaskResultOptions = {}
     ): Promise<void> {
-        const nextCursorCh = options.placeCursorAfterChecklist
+        const nextCursorCh = options.placeCursorBeforeActualStart
             ? getCursorBeforeActualStartCh(result.content)
             : result.content.length;
 
