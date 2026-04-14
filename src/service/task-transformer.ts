@@ -391,13 +391,6 @@ export function formatTime(date: Date): string {
     return `${h}:${m}`;
 }
 
-const TASK_STATUS_PREFIX_REGEX = /^- \[[ /x]\]\s*/;
-
-export function getChecklistContentStartCh(lineText: string): number {
-    const match = lineText.match(TASK_STATUS_PREFIX_REGEX);
-    return match ? match[0].length : 0;
-}
-
 /**
  * タスク開始時のカーソル位置: 実際の開始時刻の直前（タスク本文の末尾）。
  *
