@@ -2368,7 +2368,7 @@ export default class LlrPlugin extends Plugin {
 
 
     private async buildRoutineInsertLines(targetDate: Date): Promise<string[]> {
-        const dueRoutines = await this.routineEngine.fetchDueRoutines(targetDate);
+        const dueRoutines = this.routineEngine.fetchDueRoutines(targetDate);
 
         if (dueRoutines.length === 0) {
             return [];

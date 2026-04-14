@@ -605,7 +605,7 @@ export class RoutineEngine {
      * Fetch all routine notes whose normalized next_due lands on the target day.
      * Used by the Insert Routine command.
      */
-    async fetchDueRoutines(today: Date): Promise<RoutineNote[]> {
+    fetchDueRoutines(today: Date): RoutineNote[] {
         const folder = this.app.vault.getFolderByPath(this.routineFolder);
         if (!folder) return [];
 
