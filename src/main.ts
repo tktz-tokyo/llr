@@ -1,6 +1,6 @@
 import { AbstractInputSuggest, App, Editor, EditorPosition, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, moment, normalizePath } from 'obsidian';
 import { calculateDuration, findLatestCompletionEndTime } from './service/time-calculator';
-import { CheckboxPressIntent, adjustTaskTimeByMinutes, getChecklistContentStartCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
+import { CheckboxPressIntent, adjustTaskTimeByMinutes, getCursorBeforeActualStartCh, getCursorAfterActualEndCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
 import { RoutineEngine, type RoutineCompletionRequest, type RoutineEngineDebugEvent, type RoutineNote } from './service/routine-engine';
 import { computeStatusBarMetrics, DurationCalculator } from './service/status-bar-calculator';
 import { parseRepeatExpression, parseScheduleExpression } from './service/yaml-parser';
@@ -2276,7 +2276,7 @@ export default class LlrPlugin extends Plugin {
         options: ApplyTaskResultOptions = {}
     ): Promise<void> {
         const nextCursorCh = options.placeCursorAfterChecklist
-            ? getChecklistContentStartCh(result.content)
+            ? getCursorBeforeActualStartCh(result.content)
             : result.content.length;
 
         switch (result.type) {
@@ -2352,7 +2352,7 @@ export default class LlrPlugin extends Plugin {
 
         // setLine よりも replaceRange の方が Live Preview のウィジェット更新がかかりやすい
         editor.replaceRange(newLine, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
-        editor.setCursor(lineIndex, newLine.length);
+        editor.setCursor(lineIndex, getCursorAfterActualEndCh(newLine, endTimeStr));
 
         // Force CM6 widget re-render (needed when triggered from click handler)
         requestAnimationFrame(() => {

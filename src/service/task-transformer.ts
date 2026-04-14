@@ -397,3 +397,37 @@ export function getChecklistContentStartCh(lineText: string): number {
     const match = lineText.match(TASK_STATUS_PREFIX_REGEX);
     return match ? match[0].length : 0;
 }
+
+/**
+ * タスク開始時のカーソル位置: 実際の開始時刻の直前（タスク本文の末尾）。
+ *
+ * 意図: タスクを開始した直後、補足メモをすぐに入力できるよう、
+ * カーソルをタスク名の直後・打刻時刻の直前に置く。
+ * 例: `- [/] [[💪プルアップ]] 10:30 -` → `[[💪プルアップ]]` の直後
+ *
+ * 実際の開始時刻が見つからない場合は行末にフォールバックする。
+ */
+export function getCursorBeforeActualStartCh(lineText: string): number {
+    const parsed = TaskParser.parseLine(lineText);
+    if (!parsed.actualStart) return lineText.length;
+    const actualText = parsed.actualEnd
+        ? ` ${parsed.actualStart} - ${parsed.actualEnd}`
+        : ` ${parsed.actualStart} -`;
+    const idx = lineText.lastIndexOf(actualText);
+    return idx >= 0 ? idx : lineText.length;
+}
+
+/**
+ * タスク完了時のカーソル位置: 完了時刻（終了時刻）の直後。
+ *
+ * 意図: 完了直後に時刻を手修正したい場合、完了時刻の末尾にカーソルを置くことで
+ * すぐに時刻だけを編集できる。行末（durationなど）ではない。
+ * 例: `- [x] [[💪プルアップ]] 10:30 - 11:00 (30m)` → `11:00` の直後
+ *
+ * 終了時刻が見つからない場合は行末にフォールバックする。
+ */
+export function getCursorAfterActualEndCh(lineText: string, actualEnd: string): number {
+    if (!actualEnd) return lineText.length;
+    const idx = lineText.lastIndexOf(actualEnd);
+    return idx >= 0 ? idx + actualEnd.length : lineText.length;
+}
