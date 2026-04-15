@@ -9,7 +9,7 @@
     "build": "node esbuild.config.mjs production",
     "build:sync": "OBSIDIAN_SYNC_ON_BUILD=1 node esbuild.config.mjs production",
     "test": "vitest",
-    "lint": "eslint src/**/*.ts",
+    "lint": "eslint \"src/**/*.ts\"",
     "changelog:update": "bash scripts/update_changelog.sh"
   },
   "keywords": [

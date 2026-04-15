@@ -1420,7 +1420,7 @@ export default class LlrPlugin extends Plugin {
         return completionDay >= visibleFrom && completionDay <= routineNote.next_due;
     }
 
-    private async buildRoutineCompletionSnapshot(file: TFile): Promise<Map<string, RoutineCompletionSnapshotEntry> | null> {
+    private buildRoutineCompletionSnapshot(file: TFile): Map<string, RoutineCompletionSnapshotEntry> | null {
         const cache = this.app.metadataCache.getFileCache(file);
         if (!cache || !cache.listItems) {
             return null;
@@ -1543,7 +1543,7 @@ export default class LlrPlugin extends Plugin {
         this.dailyNoteAutoInsertTimers.set(file.path, timer);
     }
 
-    private async tryAutoInsertTodayDailyNoteOnStartup(): Promise<void> {
+    private tryAutoInsertTodayDailyNoteOnStartup(): void {
         const file = this.resolveTodayDailyNoteFile();
         if (!file) return;
         this.scheduleDailyNoteRoutineAutoInsert(file, 0, 'startup');
@@ -2294,7 +2294,7 @@ export default class LlrPlugin extends Plugin {
                 break;
             case 'complete':
                 this.debugLog('Action: Complete (via transformer signal)');
-                this.completeTask(editor, view, lineIndex, lineText);
+                await this.completeTask(editor, view, lineIndex, lineText);
                 break;
             case 'interrupt': {
                 editor.replaceRange(result.content, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
@@ -2369,7 +2369,7 @@ export default class LlrPlugin extends Plugin {
 
 
     private async buildRoutineInsertLines(targetDate: Date): Promise<string[]> {
-        const dueRoutines = this.routineEngine.fetchDueRoutines(targetDate);
+        const dueRoutines = await this.routineEngine.fetchDueRoutines(targetDate);
 
         if (dueRoutines.length === 0) {
             return [];

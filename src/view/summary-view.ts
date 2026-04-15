@@ -35,6 +35,7 @@ export class SummaryView extends ItemView {
     }
 
     getDisplayText() {
+        // eslint-disable-next-line obsidianmd/ui/sentence-case
         return 'LLR Summary';
     }
 
@@ -318,11 +319,11 @@ export class SummaryView extends ItemView {
         const infoRow = navHeader.createEl('div', { cls: 'llr-summary-info' });
 
         const totalBox = infoRow.createEl('div', { cls: 'llr-info-box' });
-        totalBox.createEl('span', { text: 'Est. total', cls: 'llr-info-label' });
+        totalBox.createEl('span', { text: 'Est. Total', cls: 'llr-info-label' });
         totalBox.createEl('span', { text: data.header.total, cls: 'llr-info-value' });
 
         const endBox = infoRow.createEl('div', { cls: 'llr-info-box' });
-        endBox.createEl('span', { text: 'Est. finish', cls: 'llr-info-label' });
+        endBox.createEl('span', { text: 'Est. Finish', cls: 'llr-info-label' });
         if (data.header.wake) {
             const valueRow = endBox.createEl('span', { cls: 'llr-info-value llr-info-value-inline' });
             valueRow.createSpan({ text: data.header.end });
@@ -567,11 +568,13 @@ export class SummaryView extends ItemView {
         type AppInternal = { internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | null } };
         const dailyNotesPlugin = (this.app as unknown as AppInternal).internalPlugins?.getPluginById?.('daily-notes');
         if (!dailyNotesPlugin?.enabled) {
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
             new Notice('Enable the core Daily Notes plugin to open or create daily notes.');
             return null;
         }
 
         if (typeof dailyNotesPlugin.instance?.getDailyNote !== 'function') {
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
             new Notice('Daily Notes API is unavailable. Reload Obsidian and try again.');
             return null;
         }
