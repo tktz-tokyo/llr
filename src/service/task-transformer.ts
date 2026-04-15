@@ -392,22 +392,46 @@ export function formatTime(date: Date): string {
 }
 
 /**
- * タスク開始時のカーソル位置: 実際の開始時刻の直前（タスク本文の末尾）。
+ * タスク開始時のカーソル位置を計算し、必要に応じてコンテンツにスペースを挿入して返す。
  *
  * 意図: タスクを開始した直後、補足メモをすぐに入力できるよう、
  * カーソルをタスク名の直後・打刻時刻の直前に置く。
- * 例: `- [/] [[💪プルアップ]] 10:30 -` → `[[💪プルアップ]]` の直後
+ * 例（テキストあり）: `- [/] [[💪プルアップ]] 10:30 -` → `[[💪プルアップ]]` の直後
  *
- * 実際の開始時刻が見つからない場合は行末にフォールバックする。
+ * タスク名テキストが一切ない場合（チェックボックス直後に時刻が来る場合）は、
+ * カーソル位置に半角スペースを1つ挿入してから返す。
+ * これにより、ユーザーがその場で入力を始めても「チェックボックス直後」にくっつかず、
+ * 時刻との間に適切な区切りが確保される。
+ * 例（テキストなし）: `- [/] 10:30 -` → スペース挿入後 `- [/]  10:30 -`、カーソルは挿入したスペースの直後
+ *
+ * 実際の開始時刻が見つからない場合は行末にフォールバックし、コンテンツは変更しない。
  */
-export function getCursorBeforeActualStartCh(lineText: string): number {
+export function prepareCursorBeforeActualStart(lineText: string): { content: string; ch: number } {
     const parsed = TaskParser.parseLine(lineText);
-    if (!parsed.actualStart) return lineText.length;
+    if (!parsed.actualStart) return { content: lineText, ch: lineText.length };
     const actualText = parsed.actualEnd
         ? ` ${parsed.actualStart} - ${parsed.actualEnd}`
         : ` ${parsed.actualStart} -`;
     const idx = lineText.lastIndexOf(actualText);
-    return idx >= 0 ? idx : lineText.length;
+    if (idx < 0) return { content: lineText, ch: lineText.length };
+
+    const beforeTime = lineText.substring(0, idx);
+    const hasNoTaskText = /^-\s+\[.\]$/.test(beforeTime);
+
+    if (hasNoTaskText) {
+        const content = lineText.substring(0, idx) + ' ' + lineText.substring(idx);
+        return { content, ch: idx + 1 };
+    }
+
+    return { content: lineText, ch: idx };
+}
+
+/**
+ * @deprecated prepareCursorBeforeActualStart を使用すること。
+ * テキストなし時のスペース挿入が考慮されていない。
+ */
+export function getCursorBeforeActualStartCh(lineText: string): number {
+    return prepareCursorBeforeActualStart(lineText).ch;
 }
 
 /**

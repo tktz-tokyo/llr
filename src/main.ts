@@ -1,6 +1,6 @@
 import { AbstractInputSuggest, App, Editor, EditorPosition, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, moment, normalizePath } from 'obsidian';
 import { calculateDuration, findLatestCompletionEndTime } from './service/time-calculator';
-import { CheckboxPressIntent, adjustTaskTimeByMinutes, getCursorBeforeActualStartCh, getCursorAfterActualEndCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
+import { CheckboxPressIntent, adjustTaskTimeByMinutes, prepareCursorBeforeActualStart, getCursorAfterActualEndCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
 import { RoutineEngine, type RoutineCompletionRequest, type RoutineEngineDebugEvent, type RoutineNote } from './service/routine-engine';
 import { computeStatusBarMetrics, DurationCalculator } from './service/status-bar-calculator';
 import { parseRepeatExpression, parseScheduleExpression } from './service/yaml-parser';
@@ -2275,21 +2275,21 @@ export default class LlrPlugin extends Plugin {
         result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string },
         options: ApplyTaskResultOptions = {}
     ): Promise<void> {
-        const nextCursorCh = options.placeCursorBeforeActualStart
-            ? getCursorBeforeActualStartCh(result.content)
-            : result.content.length;
+        const { content: effectiveContent, ch: nextCursorCh } = options.placeCursorBeforeActualStart
+            ? prepareCursorBeforeActualStart(result.content)
+            : { content: result.content, ch: result.content.length };
 
         switch (result.type) {
             case 'update':
-                editor.replaceRange(result.content, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
+                editor.replaceRange(effectiveContent, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
                 editor.setCursor(lineIndex, nextCursorCh);
-                this.debugLog('Task updated', { content: result.content });
+                this.debugLog('Task updated', { content: effectiveContent });
                 // No manual call needed here anymore, onMetadataChanged will catch it
                 break;
             case 'insert':
-                editor.replaceRange('\n' + result.content, { line: lineIndex, ch: lineText.length });
+                editor.replaceRange('\n' + effectiveContent, { line: lineIndex, ch: lineText.length });
                 editor.setCursor(lineIndex + 1, nextCursorCh);
-                this.debugLog('New task inserted', { content: result.content });
+                this.debugLog('New task inserted', { content: effectiveContent });
                 break;
             case 'complete':
                 this.debugLog('Action: Complete (via transformer signal)');
