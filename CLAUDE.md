@@ -63,9 +63,24 @@ When the request is about LLR plugin runtime logs or JSONL debugging:
 - Go directly to the debug JSONL log path and inspect around the reported local time.
 - For mobile issues, prefer the mobile debug logs first.
 
+## Build / Deploy / Reload
+
+| やること | コマンド |
+|---|---|
+| ビルドのみ | `npm run build` |
+| ビルド + Vault配置(PC + モバイル) | `npm run build:sync` |
+| Obsidianプラグインを再ロード | `obsidian plugin:reload id=llr` |
+| **ビルド + 配置 + 再ロード(main限定)** | `npm run deploy` |
+| Lint | `npm run lint` |
+
+**重要**:
+- `npm run build` 単体ではObsidianに反映されない。動作確認には `build:sync` + `obsidian plugin:reload id=llr` を必ずセットで実行する。
+- `npm run deploy` script は **main ブランチにしか存在しない**。`trial/current` で作業するときは `npm run build:sync && obsidian plugin:reload id=llr` を手で叩く(または2コマンドを `&&` でつなぐ)。
+- 「Obsidianを手動でリロードしてください」と言わない。**CLI で完結する**ので必ず `obsidian plugin:reload id=llr` を実行すること。
+
 ## Common Workflows
 
-- After implementation changes, prefer `npm run build:sync` and then `obsidian plugin:reload id=llr`.
+- 実装変更後は上記テーブル参照。`build:sync` のあと必ず `obsidian plugin:reload id=llr` でリロードする。
 - When behavior and docs disagree, confirm behavior from `src/` and then update the relevant doc in `docs/specs/`.
 
 ## Obsidian Community Plugin Bot Review Workflow
