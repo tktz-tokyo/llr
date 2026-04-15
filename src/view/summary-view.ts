@@ -35,8 +35,7 @@ export class SummaryView extends ItemView {
     }
 
     getDisplayText() {
-        // eslint-disable-next-line obsidianmd/ui/sentence-case
-        return 'LLR Summary';
+        return 'Daily summary';
     }
 
     getIcon() {
@@ -568,14 +567,12 @@ export class SummaryView extends ItemView {
         type AppInternal = { internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | null } };
         const dailyNotesPlugin = (this.app as unknown as AppInternal).internalPlugins?.getPluginById?.('daily-notes');
         if (!dailyNotesPlugin?.enabled) {
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
-            new Notice('Enable the core Daily Notes plugin to open or create daily notes.');
+            new Notice('Enable the core daily notes plugin to open or create daily notes.');
             return null;
         }
 
         if (typeof dailyNotesPlugin.instance?.getDailyNote !== 'function') {
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
-            new Notice('Daily Notes API is unavailable. Reload Obsidian and try again.');
+            new Notice('Daily notes API is unavailable. Reload Obsidian and try again.');
             return null;
         }
 

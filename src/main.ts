@@ -2,12 +2,11 @@ import { AbstractInputSuggest, App, Editor, EditorPosition, MarkdownView, Notice
 import { calculateDuration, findLatestCompletionEndTime } from './service/time-calculator';
 import { CheckboxPressIntent, adjustTaskTimeByMinutes, prepareCursorBeforeActualStart, getCursorAfterActualEndCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
 import { RoutineEngine, type RoutineCompletionRequest, type RoutineEngineDebugEvent, type RoutineNote } from './service/routine-engine';
-import { computeStatusBarMetrics, DurationCalculator } from './service/status-bar-calculator';
+import { computeStatusBarMetrics } from './service/status-bar-calculator';
 import { parseRepeatExpression, parseScheduleExpression } from './service/yaml-parser';
 import { parseRoutineRescheduleMarker, replaceRoutineRescheduleMarker } from './service/routine-reschedule-marker';
 import { hasPendingRoutineAtDoneMarker, replacePendingRoutineAtDoneMarker } from './service/routine-atdone-marker';
 import { SummaryView, VIEW_TYPE_SUMMARY } from './view/summary-view';
-import { computeSummaryData } from './service/summary-calculator';
 import { isDailyNoteMatch, resolveDailyNoteDate, resolveMutationReferenceDate, resolveReferenceDate, type DailyNoteSettings as DailyNoteSettingsSpec } from './service/daily-note-context';
 import { TaskParser } from './service/task-parser';
 
@@ -493,8 +492,8 @@ export default class LlrPlugin extends Plugin {
     private debugLog(message: string, data?: unknown) {
         const timestamp = new Date().toISOString();
         const logMsg = `[LLR Debug ${timestamp}] ${message}`;
-        console.log(logMsg);
-        if (data) console.log(data);
+        console.debug(logMsg);
+        if (data) console.debug(data);
         this.emitDebugRecord('plugin', message, data);
     }
 
@@ -844,7 +843,7 @@ export default class LlrPlugin extends Plugin {
         const nowTime = this.formatTime(now);
 
         // 1. Status Bar update
-        const { totalMin, remainMin, cursorMin } = computeStatusBarMetrics(
+        const { remainMin, cursorMin } = computeStatusBarMetrics(
             lines,
             cursorLine,
             nowTime,
@@ -1367,8 +1366,8 @@ export default class LlrPlugin extends Plugin {
         void this.primeRoutineCompletionSnapshotAsync(file);
     }
 
-    private async primeRoutineCompletionSnapshotAsync(file: TFile): Promise<void> {
-        const snapshot = await this.buildRoutineCompletionSnapshot(file);
+    private primeRoutineCompletionSnapshotAsync(file: TFile): void {
+        const snapshot = this.buildRoutineCompletionSnapshot(file);
         if (!snapshot) return;
         this.routineCompletionSnapshotByFile.set(file.path, snapshot);
     }
@@ -1645,7 +1644,7 @@ export default class LlrPlugin extends Plugin {
     }
 
     onunload() {
-        console.log('Unloading Llr Plugin...');
+        console.debug('Unloading Llr Plugin...');
         document.body.classList.remove('llr-mobile-large-checkbox');
         if (this.statusBarDebounce) clearTimeout(this.statusBarDebounce);
         if (this.refreshTimer) clearInterval(this.refreshTimer);
@@ -1703,7 +1702,7 @@ export default class LlrPlugin extends Plugin {
             });
         }
 
-        const currentSnapshot = await this.buildRoutineCompletionSnapshot(file);
+        const currentSnapshot = this.buildRoutineCompletionSnapshot(file);
         if (!currentSnapshot) {
             this.routineCompletionSnapshotByFile.delete(file.path);
             return;
@@ -2268,6 +2267,7 @@ export default class LlrPlugin extends Plugin {
         return !previousLineText.startsWith('- [/]') && result.content.startsWith('- [/]');
     }
 
+    // eslint-disable-next-line @typescript-eslint/require-await -- Multiple callers await this in async chains; body is sync today but the Promise contract is preserved
     private async applyTaskResult(
         editor: Editor,
         view: MarkdownView,
@@ -2294,7 +2294,7 @@ export default class LlrPlugin extends Plugin {
                 break;
             case 'complete':
                 this.debugLog('Action: Complete (via transformer signal)');
-                await this.completeTask(editor, view, lineIndex, lineText);
+                this.completeTask(editor, view, lineIndex, lineText);
                 break;
             case 'interrupt': {
                 editor.replaceRange(result.content, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
@@ -2368,8 +2368,9 @@ export default class LlrPlugin extends Plugin {
     }
 
 
+    // eslint-disable-next-line @typescript-eslint/require-await -- Callers await in async chains; body is sync today but the Promise contract is preserved
     private async buildRoutineInsertLines(targetDate: Date): Promise<string[]> {
-        const dueRoutines = await this.routineEngine.fetchDueRoutines(targetDate);
+        const dueRoutines = this.routineEngine.fetchDueRoutines(targetDate);
 
         if (dueRoutines.length === 0) {
             return [];
