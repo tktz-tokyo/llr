@@ -340,7 +340,7 @@ export class RoutineEngine {
         if (!note.frequency) return note;
         if (!note.next_due) return note;
         if (note.frequency.type === 'none') return note;
-        if (note.rollover === true) return note;
+        if (this.isRolloverEnabled(note)) return note;
 
         const targetStr = toDateString(targetDate);
         if (note.next_due >= targetStr) return note;
