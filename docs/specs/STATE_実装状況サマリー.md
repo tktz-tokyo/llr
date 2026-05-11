@@ -75,7 +75,7 @@
   - `{{llr-today}}`
   - `{{llr-routines}}`
   - `<!-- llr:insert-routine -->`
-- `Routine Sections` 設定（時刻 + ラベル）に基づき、`H1` 見出しでグルーピング。
+- `Routine Sections` 設定（時刻 + ラベル）に基づき、`H3` 見出しでグルーピング。
 
 ### F. Settings UI (Implemented subset)
 - `Debug mode`（Notice + trace JSONL）

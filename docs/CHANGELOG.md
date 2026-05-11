@@ -13,6 +13,8 @@
 
 ## Git History Snapshot
 
+### 2026-05-11
+- Use H3 headings for routine section insertion in personal BRAT builds.
 ### 2026-03-31
 - Record branch layout for release, AI, and SRS work (`6c50e7d`)
 ### 2026-03-30

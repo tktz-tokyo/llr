@@ -1479,7 +1479,7 @@ export default class LlrPlugin extends Plugin {
             }
             break;
         }
-        return selected ? `# ${selected.label}` : null;
+        return selected ? `### ${selected.label}` : null;
     }
 
     private scheduleDailyNoteRoutineAutoInsert(file: TFile, attempt = 0): void {
