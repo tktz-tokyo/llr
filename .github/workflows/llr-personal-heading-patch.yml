@@ -1,0 +1,95 @@
+name: Apply personal LLR heading patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/llr-personal-heading-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Apply H3 routine heading patch
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          function read(path) {
+            return fs.readFileSync(path, 'utf8');
+          }
+
+          function write(path, content) {
+            fs.writeFileSync(path, content, 'utf8');
+          }
+
+          function replace(path, from, to) {
+            const current = read(path);
+            if (current.includes(to)) return;
+            if (!current.includes(from)) throw new Error(`Expected text not found in ${path}`);
+            write(path, current.replace(from, to));
+          }
+
+          function updateJson(path, indent, updater) {
+            const data = JSON.parse(read(path));
+            updater(data);
+            write(path, `${JSON.stringify(data, null, indent)}\n`);
+          }
+
+          replace('src/main.ts', '        return selected ? `# ${selected.label}` : null;', '        return selected ? `### ${selected.label}` : null;');
+
+          updateJson('manifest.json', 4, (data) => { data.version = '0.1.9'; });
+          updateJson('package.json', 2, (data) => { data.version = '0.1.9'; });
+          updateJson('package-lock.json', 2, (data) => {
+            data.version = '0.1.9';
+            if (data.packages && data.packages['']) data.packages[''].version = '0.1.9';
+          });
+          updateJson('versions.json', 2, (data) => { data['0.1.9'] = '1.4.0'; });
+
+          replace('docs/specs/UI操作仕様.md', '**H1見出し** でグルーピングされる。', '**H3見出し** でグルーピングされる。');
+          replace('docs/specs/UI操作仕様.md', '見出しレベルは現状 `H1` 固定。', '見出しレベルは現状 `H3` 固定。');
+          replace('docs/specs/デイリーノート自動挿入.md', '`H1` 見出しへ分類する。', '`H3` 見出しへ分類する。');
+          replace('docs/specs/設定画面.md', '見出しラベル（`H1`本文）', '見出しラベル（`H3`本文）');
+          replace('docs/specs/STATE_実装状況サマリー.md', '`H1` 見出しでグルーピング。', '`H3` 見出しでグルーピング。');
+
+          const changelog = read('docs/CHANGELOG.md');
+          const entry = '### 2026-05-11\n- Use H3 headings for routine section insertion in personal BRAT builds.\n';
+          if (!changelog.includes('Use H3 headings for routine section insertion')) {
+            write('docs/CHANGELOG.md', changelog.replace('## Git History Snapshot\n\n', `## Git History Snapshot\n\n${entry}`));
+          }
+          NODE
+      - name: Install dependencies
+        run: npm ci
+      - name: Build bundle
+        run: npm run build
+      - name: Verify heading output
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const src = fs.readFileSync('src/main.ts', 'utf8');
+          const bundle = fs.readFileSync('main.js', 'utf8');
+          if (!src.includes('return selected ? `### ${selected.label}` : null;')) throw new Error('src/main.ts does not contain H3 heading output');
+          if (!bundle.includes('return selected ? `### ${selected.label}` : null;')) throw new Error('main.js does not contain H3 heading output');
+          NODE
+      - name: Commit patch and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/main.ts manifest.json package.json package-lock.json versions.json docs/CHANGELOG.md docs/specs/UI操作仕様.md docs/specs/デイリーノート自動挿入.md docs/specs/設定画面.md docs/specs/STATE_実装状況サマリー.md
+          git add -f main.js
+          git rm .github/workflows/llr-personal-heading-patch.yml
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Use H3 headings for routine sections'
+            git push
+          fi
