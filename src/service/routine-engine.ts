@@ -33,9 +33,10 @@ export interface RoutineNote {
     start?: number;        // 省略可。HHmm 形式。展開時に単一時刻プレフィクスとして付与
     start_before?: number; // 省略可。next_due の何日前から表示するか（日数）
     section?: number;      // 省略可。展開時のソート基準（時間帯の概念）。未設定は先頭
-    frequency?: Frequency;
+    frequency: Frequency;
     next_due?: string;
     rollover?: boolean;
+    repeatExplicit?: boolean; // repeat/frequency/schedule が明示されていたか
 }
 
 export type RoutineCompletionMode = 'normal' | 'advanceFromDue';
@@ -232,6 +233,9 @@ export class RoutineEngine {
         const cache = this.app.metadataCache.getFileCache(file);
         const fm = cache?.frontmatter || {};
 
+        const repeatExplicit = fm.repeat !== undefined && fm.repeat !== null ||
+            fm.frequency !== undefined && fm.frequency !== null ||
+            fm.schedule !== undefined && fm.schedule !== null;
         const frequency = this.resolveFrequency(fm.repeat, fm.frequency, fm.schedule);
         return {
             file,
@@ -242,6 +246,7 @@ export class RoutineEngine {
             frequency,
             next_due: typeof fm.next_due === 'string' ? fm.next_due : undefined,
             rollover: this.resolveRollover(fm.rollover),
+            repeatExplicit,
         };
     }
 
@@ -250,7 +255,7 @@ export class RoutineEngine {
         return undefined;
     }
 
-    private resolveFrequency(rawRepeat: unknown, rawFrequency: unknown, rawSchedule: unknown): Frequency | undefined {
+    private resolveFrequency(rawRepeat: unknown, rawFrequency: unknown, rawSchedule: unknown): Frequency {
         if (typeof rawRepeat === 'number' || typeof rawRepeat === 'string') {
             const normalized = normalizeRepeatExpression(rawRepeat);
             if (normalized === 'none' || normalized === 'no') {
@@ -261,7 +266,10 @@ export class RoutineEngine {
         if (typeof rawSchedule === 'string' && rawSchedule.trim().length > 0) {
             return { type: 'schedule', expression: rawSchedule };
         }
-        return rawFrequency as Frequency | undefined;
+        if (rawFrequency !== undefined && rawFrequency !== null) {
+            return rawFrequency as Frequency;
+        }
+        return { type: 'schedule', expression: 'every day' };
     }
 
     private defaultRollover(frequency: Frequency): boolean {
@@ -283,19 +291,11 @@ export class RoutineEngine {
     }
 
     private isRolloverEnabled(note: RoutineNote): boolean {
-        if (note.frequency) {
-            return note.rollover ?? this.defaultRollover(note.frequency);
-        }
-        return note.rollover ?? true;
+        return note.rollover ?? this.defaultRollover(note.frequency);
     }
 
     private resolveDisplayDueDate(note: RoutineNote, targetDate: Date): string | null {
         const targetStr = toDateString(targetDate);
-
-        // One-off routine notes can omit repeat/frequency and still surface via next_due.
-        if (!note.frequency) {
-            return note.next_due ?? null;
-        }
 
         if (!note.next_due) {
             return note.frequency.type === 'none' ? null : targetStr;
@@ -337,7 +337,6 @@ export class RoutineEngine {
     }
 
     private normalizeOverdueNextDueForPreview(note: RoutineNote, targetDate: Date): RoutineNote {
-        if (!note.frequency) return note;
         if (!note.next_due) return note;
         if (note.frequency.type === 'none') return note;
         if (this.isRolloverEnabled(note)) return note;
@@ -464,13 +463,11 @@ export class RoutineEngine {
         });
 
         try {
-            // Default completion logic: if no frequency is defined, it's an "auto-repair" case
-            let repeatToAppend: number | undefined = undefined;
-            if (!frequency) {
-                frequency = { type: 'schedule', expression: 'every day' };
-                repeatToAppend = 1;
-                this.emitNotice('LLR: 毎日リピートを設定しました', 3000);
-            }
+            // If repeat was not explicit in frontmatter (repeatExplicit === false), write repeat: 1 to make the default permanent.
+            const repeatToAppend: number | undefined = routineNote.repeatExplicit === false ? 1 : undefined;
+
+            // frequency is always set via readRoutineNote, but guard here for safety.
+            if (!frequency) frequency = { type: 'schedule', expression: 'every day' };
 
             const completionDay = this.normalizeToDateOnly(completionDate);
             const isDueAnchored = usesDueAnchor(frequency);

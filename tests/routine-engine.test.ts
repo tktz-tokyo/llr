@@ -125,35 +125,42 @@ describe('RoutineEngine', () => {
             expect(calledArg).toEqual({ nextDue: '2026-02-23' });
         });
 
-        it('should update next_due to tomorrow if frequency is missing', async () => {
+        it('should write repeat: 1 and advance to tomorrow when no repeat in frontmatter', async () => {
             const mockFile = { path: 'routine/no-freq.md' } as TFile;
-            const routineNote = { file: mockFile, frequency: undefined };
+            mockApp.metadataCache.getFileCache.mockReturnValue({
+                frontmatter: { next_due: '2026-02-22' },
+            });
+
+            const routineNote = engine.readRoutineNote(mockFile)!;
+            expect(routineNote.repeatExplicit).toBe(false);
 
             const updateSpy = vi.spyOn(engine, 'updateNextDue').mockResolvedValue();
-            await engine.processCompletion(routineNote as any, new Date('2026-02-22'));
+            await engine.processCompletion(routineNote, new Date('2026-02-22'));
 
             expect(updateSpy).toHaveBeenCalled();
             const calledArg = updateSpy.mock.calls[0][1];
             expect(calledArg).toEqual({ nextDue: '2026-02-23', repeat: 1 });
         });
 
-        it('readRoutineNote should handle missing frontmatter', async () => {
+        it('readRoutineNote should handle missing frontmatter and default to every day', async () => {
             const mockFile = { path: 'routine/no-yaml.md' } as TFile;
             mockApp.metadataCache.getFileCache.mockReturnValue({}); // No frontmatter
 
-            const note = await engine.readRoutineNote(mockFile);
+            const note = engine.readRoutineNote(mockFile);
             expect(note).not.toBeNull();
-            expect(note?.frequency).toBeUndefined();
+            expect(note?.frequency).toEqual({ type: 'schedule', expression: 'every day' });
+            expect(note?.repeatExplicit).toBe(false);
         });
 
-        it('readRoutineNote should handle malformed frontmatter (e.g. leading space)', async () => {
+        it('readRoutineNote should handle malformed frontmatter and default to every day', async () => {
             // Obsidian's metadataCache usually returns null/empty for malformed YAML
             const mockFile = { path: 'routine/malformed.md' } as TFile;
             mockApp.metadataCache.getFileCache.mockReturnValue({ frontmatter: undefined });
 
-            const note = await engine.readRoutineNote(mockFile);
+            const note = engine.readRoutineNote(mockFile);
             expect(note).not.toBeNull();
-            expect(note?.frequency).toBeUndefined();
+            expect(note?.frequency).toEqual({ type: 'schedule', expression: 'every day' });
+            expect(note?.repeatExplicit).toBe(false);
         });
 
         it('readRoutineNote should parse start_before from supported formats', async () => {
@@ -184,30 +191,18 @@ describe('RoutineEngine', () => {
             expect(japanese?.start_before).toBe(7);
         });
 
-        it('should update next_due to tomorrow if frontmatter is unparseable during processCompletion', async () => {
+        it('should write repeat: 1 and advance to tomorrow when frontmatter is unparseable', async () => {
             const mockFile = { path: 'routine/unparseable.md' } as TFile;
-            // Simulate a scenario where readRoutineNote would return a note with undefined frequency
-            // due to unparseable frontmatter (e.g., malformed YAML)
-            mockApp.metadataCache.getFileCache.mockImplementation((file: TFile) => {
-                if (file.path === 'routine/unparseable.md') {
-                    return { frontmatter: undefined }; // Simulate unparseable YAML
-                }
-                return {};
-            });
+            mockApp.metadataCache.getFileCache.mockReturnValue({ frontmatter: undefined });
 
-            const routineNote = {
-                file: mockFile,
-                // frequency will be undefined after readRoutineNote is called internally
-                next_due: '2026-02-22'
-            } as any;
+            const routineNote = engine.readRoutineNote(mockFile)!;
+            expect(routineNote.repeatExplicit).toBe(false);
+            expect(routineNote.frequency).toEqual({ type: 'schedule', expression: 'every day' });
 
             const updateSpy = vi.spyOn(engine, 'updateNextDue').mockResolvedValue();
-
-            // with undefined frequency due to the mocked getFileCache.
-            await engine.processCompletion(routineNote as any, new Date('2026-02-22'));
+            await engine.processCompletion(routineNote, new Date('2026-02-22'));
             const calledArg = updateSpy.mock.calls[0][1];
 
-            // Should be the day after the completion date (completion-day based)
             expect(calledArg).toEqual({ nextDue: '2026-02-23', repeat: 1 });
         });
 
@@ -388,12 +383,19 @@ describe('RoutineEngine', () => {
             expect(updateSpy).toHaveBeenCalledWith(mockFile, { nextDue: null, repeat: undefined });
         });
 
-        it('should append repeat: 1 when frequency is missing', async () => {
-            const mockFile = { path: 'routine/new.md' } as any;
-            const routineNote = { file: mockFile, frequency: undefined };
+        it('should append repeat: 1 when repeat is not explicit in frontmatter', async () => {
+            const mockFile = { path: 'routine/new.md' } as TFile;
+            mockApp.metadataCache.getFileCache.mockReturnValue({
+                frontmatter: {
+                    next_due: '2026-02-22',
+                },
+            });
+
+            const routineNote = engine.readRoutineNote(mockFile)!;
+            expect(routineNote.repeatExplicit).toBe(false);
 
             const updateSpy = vi.spyOn(engine, 'updateNextDue').mockResolvedValue();
-            await engine.processCompletion(routineNote as any, new Date('2026-02-22'));
+            await engine.processCompletion(routineNote, new Date('2026-02-22'));
 
             expect(updateSpy).toHaveBeenCalledWith(mockFile, {
                 nextDue: '2026-02-23',
@@ -538,7 +540,7 @@ describe('RoutineEngine', () => {
             expect(results).toHaveLength(0);
         });
 
-        it('includes a one-off routine note when next_due is today even without repeat', async () => {
+        it('includes a routine note when next_due is today even without explicit repeat', async () => {
             const routineFile = makeFile('routine/one-off-today.md');
             mockApp.vault.getFolderByPath.mockReturnValue({ children: [routineFile] });
             mockApp.metadataCache.getFileCache.mockReturnValue({
@@ -551,7 +553,7 @@ describe('RoutineEngine', () => {
             expect(results).toHaveLength(1);
             expect(results[0].file.path).toBe('routine/one-off-today.md');
             expect(results[0].next_due).toBe('2026-02-27');
-            expect(results[0].frequency).toBeUndefined();
+            expect(results[0].frequency).toEqual({ type: 'schedule', expression: 'every day' });
         });
 
         it('shows a one-off routine note during the lead window defined by start_before', async () => {
@@ -569,8 +571,8 @@ describe('RoutineEngine', () => {
             expect(results[0].file.path).toBe('routine/one-off-lead-window.md');
         });
 
-        it('does not keep overdue one-off routine notes visible after next_due passes', async () => {
-            const routineFile = makeFile('routine/one-off-overdue.md');
+        it('keeps showing an overdue routine note without explicit repeat because it defaults to every day', async () => {
+            const routineFile = makeFile('routine/no-repeat-overdue.md');
             mockApp.vault.getFolderByPath.mockReturnValue({ children: [routineFile] });
             mockApp.metadataCache.getFileCache.mockReturnValue({
                 frontmatter: {
@@ -579,7 +581,8 @@ describe('RoutineEngine', () => {
             });
 
             const results = await engine.fetchDueRoutines(new Date('2026-02-27T12:00:00'));
-            expect(results).toHaveLength(0);
+            expect(results).toHaveLength(1);
+            expect(results[0].file.path).toBe('routine/no-repeat-overdue.md');
         });
 
         it('shows a routine during the lead window defined by start_before', async () => {
