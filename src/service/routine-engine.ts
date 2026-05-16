@@ -614,7 +614,9 @@ export class RoutineEngine {
 
             const note = this.readRoutineNote(child);
             if (!note) continue;
-            if (!note.next_due) continue;
+            // Skip if no next_due and either: explicitly set to none, or has an explicit repeat (needs an anchor date).
+            // Notes with no explicit repeat default to every day and can surface without next_due.
+            if (!note.next_due && (note.frequency.type === 'none' || note.repeatExplicit)) continue;
 
             const normalizedNote = this.normalizeOverdueNextDueForPreview(note, today);
 
