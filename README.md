@@ -127,7 +127,7 @@ start_before: 2         # 2 日前から前倒し表示
 
 完了したら `next_due` が自動更新されます。今日表示される条件の決定木は [`docs/specs/ルーチンエンジン仕様.md`](https://github.com/goryugocast/llr/blob/main/docs/specs/%E3%83%AB%E3%83%BC%E3%83%81%E3%83%B3%E3%82%A8%E3%83%B3%E3%82%B8%E3%83%B3%E4%BB%95%E6%A7%98.md) §3.6 にフローチャートあり。
 
-<!-- TODO: assets/llr-routine-insert.gif — Insert Routine の展開の様子 -->
+![Insert Routine demo](assets/llr-routine-insert.gif)
 
 ---
 
