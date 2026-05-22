@@ -4,13 +4,18 @@ Obsidian 上の LLR プラグインの公開ドキュメント入口。
 このファイルを最初の参照点にする。
 
 ## まず読む（最短導線）
+- [今回のバージョンについて](specs/今回のバージョンについて.md): 現行リリースの変更点・注意点
 - [オープンベータ案内](open-beta.md): いま何を試してほしいかの短い案内
 - [ベータチェックリスト](beta-checklist.md): 実地テスト前の最小確認
 - [ベータ確認スナップショット](beta-verification.md): いま何を確認済みか
 - [クイックマニュアル](クイックマニュアル.md): 実用優先の操作マニュアル
-- [チートシート](チートシート.md): `repeat` と操作の早見表
-- [実装状況サマリー](specs/STATE_実装状況サマリー.md): 実装済み / 未実装 / 廃止の現状まとめ
+- [チートシート](チートシート.md): `repeat` / 操作の早見表 + 逆引き「こんな時 → これ」
+- [実装状況サマリー](specs/STATE_実装状況サマリー.md): 実装済み / 未実装 / **廃止・範囲外** の現状まとめ
 - [CHANGELOG](CHANGELOG.md): プレリリース変更履歴
+
+### 「これってできる?」の即答先
+- 「タイマー・通知・カレンダー連携・統計グラフ」など → [実装状況サマリー §3 廃止・範囲外](specs/STATE_実装状況サマリー.md)
+- 「先送り・スキップ・前倒し完了など」 → [チートシート 逆引き](チートシート.md)
 
 ## 読み方（重要）
 - **現状の真実（コードと合っているか）**: `docs/specs/STATE_実装状況サマリー.md`
@@ -75,6 +80,10 @@ Obsidian 上の LLR プラグインの公開ドキュメント入口。
 - [デイリーノート自動挿入](specs/デイリーノート自動挿入.md): マーカー方式
 - [サイドバー要約ビュー仕様](specs/サイドバー要約ビュー仕様.md): サイドバー詳細仕様
 - [デバッグモード](specs/デバッグモード.md): Notice と trace JSONL
+- [start_before-@done仕様](specs/start_before-@done仕様.md): 前倒し中の `@done` で次回送り
+- [routine-reschedule-marker仕様](specs/routine-reschedule-marker仕様.md): `@MMDD` で routine 先送り
+- [未来日付デイリーノートとルーチン基準日ポリシー](specs/未来日付デイリーノートとルーチン基準日ポリシー.md): future-clamp 方針
+- [incubate仕様](specs/incubate仕様.md) / [incubate哲学](specs/incubate哲学.md): 「今は触らない」ノートの再浮上（draft）
 
 ## Design（設計思想）
 - [設計思想](specs/設計思想.md)
