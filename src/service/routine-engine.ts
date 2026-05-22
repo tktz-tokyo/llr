@@ -33,9 +33,22 @@ export interface RoutineNote {
     start?: number;        // 省略可。HHmm 形式。展開時に単一時刻プレフィクスとして付与
     start_before?: number; // 省略可。next_due の何日前から表示するか（日数）
     section?: number;      // 省略可。展開時のソート基準（時間帯の概念）。未設定は先頭
-    frequency?: Frequency;
+    frequency: Frequency;
     next_due?: string;
     rollover?: boolean;
+    repeatExplicit?: boolean; // repeat/frequency/schedule が明示されていたか
+}
+
+export type RoutineCompletionMode = 'normal' | 'advanceFromDue';
+
+export interface RoutineCompletionRequest {
+    completionDate: Date;
+    mode?: RoutineCompletionMode;
+}
+
+interface PendingRoutineUpdate {
+    timer: ReturnType<typeof setTimeout>;
+    request: RoutineCompletionRequest;
 }
 
 export function resolveDeferredDateByCutoff(now: Date, cutoffTimeHHmm = '0300'): Date {
@@ -53,7 +66,7 @@ export function resolveDeferredDateByCutoff(now: Date, cutoffTimeHHmm = '0300'):
 export class RoutineEngine {
     private app: App;
     private routineFolder: string;
-    private pendingTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+    private pendingTimers: Map<string, PendingRoutineUpdate> = new Map();
     private onDebugEvent?: (event: RoutineEngineDebugEvent) => void;
     private onNotice?: (message: string, timeout?: number) => void;
 
@@ -168,6 +181,22 @@ export class RoutineEngine {
         throw new Error('Due-anchor catch-up exceeded iteration limit');
     }
 
+    private shouldAdvanceFromCurrentDue(
+        note: RoutineNote,
+        completionDate: Date,
+        mode: RoutineCompletionMode
+    ): boolean {
+        if (mode !== 'advanceFromDue') return false;
+        if (!note.next_due) return false;
+
+        const leadDays = note.start_before ?? 0;
+        if (leadDays <= 0) return false;
+
+        const completionDay = toDateString(this.normalizeToDateOnly(completionDate));
+        const visibleFrom = toDateString(this.addDays(fromDateString(note.next_due), -leadDays));
+        return completionDay >= visibleFrom && completionDay <= note.next_due;
+    }
+
     /**
      * Extract all Obsidian wikilink texts from a task line.
      * e.g. "- [x] [[朝のルーチン]]と[[運動]]" → ["朝のルーチン", "運動"]
@@ -204,6 +233,9 @@ export class RoutineEngine {
         const cache = this.app.metadataCache.getFileCache(file);
         const fm = cache?.frontmatter || {};
 
+        const repeatExplicit = fm.repeat !== undefined && fm.repeat !== null ||
+            fm.frequency !== undefined && fm.frequency !== null ||
+            fm.schedule !== undefined && fm.schedule !== null;
         const frequency = this.resolveFrequency(fm.repeat, fm.frequency, fm.schedule);
         return {
             file,
@@ -214,6 +246,7 @@ export class RoutineEngine {
             frequency,
             next_due: typeof fm.next_due === 'string' ? fm.next_due : undefined,
             rollover: this.resolveRollover(fm.rollover),
+            repeatExplicit,
         };
     }
 
@@ -222,7 +255,7 @@ export class RoutineEngine {
         return undefined;
     }
 
-    private resolveFrequency(rawRepeat: unknown, rawFrequency: unknown, rawSchedule: unknown): Frequency | undefined {
+    private resolveFrequency(rawRepeat: unknown, rawFrequency: unknown, rawSchedule: unknown): Frequency {
         if (typeof rawRepeat === 'number' || typeof rawRepeat === 'string') {
             const normalized = normalizeRepeatExpression(rawRepeat);
             if (normalized === 'none' || normalized === 'no') {
@@ -233,11 +266,10 @@ export class RoutineEngine {
         if (typeof rawSchedule === 'string' && rawSchedule.trim().length > 0) {
             return { type: 'schedule', expression: rawSchedule };
         }
-        if (rawFrequency == null) return undefined;
-        if (typeof rawFrequency === 'object' && 'type' in rawFrequency) {
+        if (rawFrequency !== undefined && rawFrequency !== null) {
             return rawFrequency as Frequency;
         }
-        return undefined;
+        return { type: 'schedule', expression: 'every day' };
     }
 
     private defaultRollover(frequency: Frequency): boolean {
@@ -259,14 +291,10 @@ export class RoutineEngine {
     }
 
     private isRolloverEnabled(note: RoutineNote): boolean {
-        if (note.frequency) {
-            return note.rollover ?? this.defaultRollover(note.frequency);
-        }
-        return note.rollover ?? true;
+        return note.rollover ?? this.defaultRollover(note.frequency);
     }
 
     private resolveDisplayDueDate(note: RoutineNote, targetDate: Date): string | null {
-        if (!note.frequency) return null;
         const targetStr = toDateString(targetDate);
 
         if (!note.next_due) {
@@ -308,11 +336,10 @@ export class RoutineEngine {
         return targetStr >= visibleFrom && targetStr <= displayDue;
     }
 
-    private async normalizeOverdueNextDue(note: RoutineNote, targetDate: Date): Promise<RoutineNote> {
-        if (!note.frequency) return note;
+    private normalizeOverdueNextDueForPreview(note: RoutineNote, targetDate: Date): RoutineNote {
         if (!note.next_due) return note;
         if (note.frequency.type === 'none') return note;
-        if (note.rollover === true) return note;
+        if (this.isRolloverEnabled(note)) return note;
 
         const targetStr = toDateString(targetDate);
         if (note.next_due >= targetStr) return note;
@@ -329,8 +356,7 @@ export class RoutineEngine {
         }
 
         if (candidate !== note.next_due) {
-            await this.updateNextDue(note.file, { nextDue: candidate });
-            this.emitDebugEvent('fetchDueRoutines:catchup-next-due', {
+            this.emitDebugEvent('fetchDueRoutines:preview-catchup-next-due', {
                 file: note.file.path,
                 from: note.next_due,
                 to: candidate,
@@ -420,37 +446,44 @@ export class RoutineEngine {
      * @param routineNote - The resolved routine note
      * @param completionDate - The date the task was marked complete (for 'after' type)
      */
-    async processCompletion(routineNote: RoutineNote, completionDate: Date): Promise<void> {
+    async processCompletion(
+        routineNote: RoutineNote,
+        completionDate: Date,
+        options: { mode?: RoutineCompletionMode } = {}
+    ): Promise<void> {
         const { file, next_due } = routineNote;
         let { frequency } = routineNote;
+        const requestedMode = options.mode ?? 'normal';
         this.emitDebugEvent('processCompletion:start', {
             file: file.path,
             completionAt: completionDate.toISOString(),
             hasFrequency: !!frequency,
             next_due: next_due ?? null,
+            mode: requestedMode,
         });
 
         try {
-            // Default completion logic: if no frequency is defined, it's an "auto-repair" case
-            let repeatToAppend: number | undefined = undefined;
-            if (!frequency) {
-                frequency = { type: 'schedule', expression: 'every day' };
-                repeatToAppend = 1;
-                this.emitNotice('LLR: 毎日リピートを設定しました', 3000);
-            }
+            // If repeat was not explicit in frontmatter (repeatExplicit === false), write repeat: 1 to make the default permanent.
+            const repeatToAppend: number | undefined = routineNote.repeatExplicit === false ? 1 : undefined;
+
+            // frequency is always set via readRoutineNote, but guard here for safety.
+            if (!frequency) frequency = { type: 'schedule', expression: 'every day' };
 
             const completionDay = this.normalizeToDateOnly(completionDate);
             const isDueAnchored = usesDueAnchor(frequency);
-            const newNextDue = isDueAnchored
-                ? this.calculateNextDueForDueAnchor(frequency, next_due, completionDay)
-                : calculateNextDue(frequency, completionDay);
+            const shouldAdvanceFromDue = this.shouldAdvanceFromCurrentDue(routineNote, completionDay, requestedMode);
+            const newNextDue = shouldAdvanceFromDue && next_due
+                ? calculateNextDue(frequency, fromDateString(next_due))
+                : isDueAnchored
+                    ? this.calculateNextDueForDueAnchor(frequency, next_due, completionDay)
+                    : calculateNextDue(frequency, completionDay);
 
             await this.updateNextDue(file, { nextDue: newNextDue, repeat: repeatToAppend });
             this.emitDebugEvent('processCompletion:done', {
                 file: file.path,
                 newNextDue,
                 baseDate: toDateString(completionDay),
-                anchorMode: isDueAnchored ? 'due' : 'completion',
+                anchorMode: shouldAdvanceFromDue ? 'atdone' : isDueAnchored ? 'due' : 'completion',
             });
         } catch (e) {
             console.error('[LLR] processCompletion error:', e);
@@ -470,13 +503,13 @@ export class RoutineEngine {
      * Schedule or cancel a debounced routine update for a specific file.
      * Use file path as key for stable debouncing across any state change.
      */
-    scheduleUpdate(routineFile: TFile, sourcePath: string, completionDate: Date | null): void {
+    scheduleUpdate(routineFile: TFile, sourcePath: string, request: RoutineCompletionRequest | null): void {
         const key = `${sourcePath}:${routineFile.path}`;
 
         // 1. Cancel any existing pending update for this specific file
         const existing = this.pendingTimers.get(key);
         if (existing) {
-            clearTimeout(existing);
+            clearTimeout(existing.timer);
             this.pendingTimers.delete(key);
             this.emitDebugEvent('scheduleUpdate:cancel-existing', {
                 key,
@@ -486,39 +519,42 @@ export class RoutineEngine {
         }
 
         // 2. If task was marked complete, schedule renewal
-        if (completionDate) {
+        if (request) {
             const scheduledAt = new Date();
             const executeAt = new Date(scheduledAt.getTime() + DEBOUNCE_DELAY_MS);
             this.emitDebugEvent('scheduleUpdate:scheduled', {
                 key,
                 routineFile: routineFile.path,
                 sourcePath,
-                completionAt: completionDate.toISOString(),
+                completionAt: request.completionDate.toISOString(),
                 scheduledAt: scheduledAt.toISOString(),
                 executeAt: executeAt.toISOString(),
                 delayMs: DEBOUNCE_DELAY_MS,
+                mode: request.mode ?? 'normal',
             });
             const timer = setTimeout(() => {
-                console.debug(`[LLR] Executing routine update for: ${routineFile.basename}`);
-                this.pendingTimers.delete(key);
-                this.emitDebugEvent('scheduleUpdate:timer-fired', {
-                    key,
-                    routineFile: routineFile.path,
-                    sourcePath,
-                    firedAt: new Date().toISOString(),
-                });
-                const routineNote = this.readRoutineNote(routineFile);
-                if (routineNote) {
-                    void this.processCompletion(routineNote, completionDate);
-                } else {
-                    this.emitDebugEvent('scheduleUpdate:missing-routine-note', {
+                void (async () => {
+                    console.debug(`[LLR] Executing routine update for: ${routineFile.basename}`);
+                    this.pendingTimers.delete(key);
+                    this.emitDebugEvent('scheduleUpdate:timer-fired', {
                         key,
                         routineFile: routineFile.path,
+                        sourcePath,
+                        firedAt: new Date().toISOString(),
                     });
-                }
+                    const routineNote = this.readRoutineNote(routineFile);
+                    if (routineNote) {
+                        await this.processCompletion(routineNote, request.completionDate, { mode: request.mode });
+                    } else {
+                        this.emitDebugEvent('scheduleUpdate:missing-routine-note', {
+                            key,
+                            routineFile: routineFile.path,
+                        });
+                    }
+                })();
             }, DEBOUNCE_DELAY_MS);
 
-            this.pendingTimers.set(key, timer);
+            this.pendingTimers.set(key, { timer, request });
         } else {
             this.emitDebugEvent('scheduleUpdate:not-scheduled', {
                 key,
@@ -535,8 +571,8 @@ export class RoutineEngine {
      */
     async flushAll(): Promise<void> {
         this.emitDebugEvent('flushAll:start', { pendingCount: this.pendingTimers.size });
-        for (const [key, timer] of this.pendingTimers.entries()) {
-            clearTimeout(timer);
+        for (const [key, pending] of this.pendingTimers.entries()) {
+            clearTimeout(pending.timer);
             this.pendingTimers.delete(key);
 
             // parse key: sourcePath:routinePath
@@ -553,9 +589,9 @@ export class RoutineEngine {
                         key,
                         routineFile: file.path,
                     });
-                    // During flushAll, we don't know the exact completion date easily,
-                    // so we use NOW, which is safe for most cases.
-                    await this.processCompletion(routineNote, new Date());
+                    await this.processCompletion(routineNote, pending.request.completionDate, {
+                        mode: pending.request.mode,
+                    });
                 }
             }
         }
@@ -566,7 +602,7 @@ export class RoutineEngine {
      * Fetch all routine notes whose normalized next_due lands on the target day.
      * Used by the Insert Routine command.
      */
-    async fetchDueRoutines(today: Date): Promise<RoutineNote[]> {
+    fetchDueRoutines(today: Date): RoutineNote[] {
         const folder = this.app.vault.getFolderByPath(this.routineFolder);
         if (!folder) return [];
 
@@ -577,10 +613,12 @@ export class RoutineEngine {
             if (child.extension !== 'md') continue;
 
             const note = this.readRoutineNote(child);
-            if (!note || !note.frequency) continue; // Must have a frequency to be a recurring routine
-            if (!note.next_due) continue;
+            if (!note) continue;
+            // Skip if no next_due and either: explicitly set to none, or has an explicit repeat (needs an anchor date).
+            // Notes with no explicit repeat default to every day and can surface without next_due.
+            if (!note.next_due && (note.frequency.type === 'none' || note.repeatExplicit)) continue;
 
-            const normalizedNote = await this.normalizeOverdueNextDue(note, today);
+            const normalizedNote = this.normalizeOverdueNextDueForPreview(note, today);
 
             const displayDue = this.resolveDisplayDueDate(normalizedNote, today);
 

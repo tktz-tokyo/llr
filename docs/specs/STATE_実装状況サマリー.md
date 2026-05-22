@@ -13,11 +13,12 @@
 - `Open Summary View`
 - `Toggle Task`
 - `Adjust Time (1m)`
-- `Start Task (Force)`
-- `Stop Task (Force)`
+- `Start Task`
+- `Complete Task`
 - `Start Task at Previous Time`
 - `Duplicate Task`
 - `Skip Task`
+- `Reschedule Routine`
 - `Insert Routine`
 - 内部用として残す非表示コマンド/アクション:
   - `Interrupt Task`
@@ -27,13 +28,21 @@
 
 ### B. Core Services
 - `src/service/task-transformer.ts`
-  - 時刻数・ステータスに応じたトグル変換
+  - v2 task line grammar（本文先頭に planned start を保持し、実績時刻/所要時間は本文末尾へ置く）に沿ったトグル変換
   - Smart Estimate（`30`, `1.5h`）
   - Force Action (`start/complete/interrupt/duplicate/retroComplete/taskify`)
+- `src/service/routine-reschedule-marker.ts`
+  - `@MMDD` / `@M/D` / `@M月D日` / `@YYYY-MM-DD` の routine 先送り指示を解釈
+  - 処理済み表記 `→YYYY-MM-DD` への正規化
+- `src/service/routine-atdone-marker.ts`
+  - 未処理 `@done` と処理済み `→done` の判定
+  - `@done` から `→done` への正規化
 - `src/service/task-parser.ts`
-  - タスク行を `status / times / estimate / content` に分解・合成
+  - v2 task line grammar: タスク行を `status / plannedStart / body / content / actualStart / actualEnd / estimate / actualDuration / marker` に分解・合成
+  - 本文先頭トークンを plannedStart として解釈、実績時刻（`HH:mm -` / `HH:mm - HH:mm`）は本文末尾から抽出
   - `[[wikilink]]` を含むタスクでも本文と見積りを分離
-  - 末尾 bare 見積り（`15m`, `1h`, `30 min`）の抽出
+  - 括弧内・末尾 bare 見積り（`15m`, `1h`, `30 min`）の抽出
+  - `@done` / `@MMDD` 等の marker を末尾から抽出し pending/resolved を判定
 - `src/service/time-calculator.ts`
   - 終了時刻計算 / 所要時間計算 / テキストからの時間推定
 - `src/service/routine-engine.ts`
@@ -60,10 +69,11 @@
   - `[x]` は no-op
 - 長押し（モバイル: 450ms / デスクトップ: 900ms）:
   - `[ ] -> [/]`（直近完了の終了時刻で開始。なければ現在時刻）
-  - `[/] -> [ ]`（時刻保持）
-  - `[x] -> [ ]`（時刻保持）
+  - `[/] -> [ ]`（本文先頭の planned start は保ちつつ、末尾の実績時刻だけ外す）
+  - `[x] -> [ ]`（本文先頭の planned start は保ちつつ、末尾の実績時刻だけ外す）
 - 長押し成立後のクリック抑止で二重実行を防止。
 - モバイルでは触覚フィードバックを実施（短押し1回、長押し2連続）。
+- 関連する軽微な補正（例: duration drift 補正）は、通常編集監視ではなく、LLR のコマンド / チェック操作にぶら下げて実行する。
 - 早めに着手したい整理として、長押し挙動は将来的に「内部コマンド相当の単位」を定義し、その呼び出し元として再整理する。
 - すぐやること:
   - もしタップ動作が別実装経路になっている箇所があれば、同じ内部関数を呼ぶように統一する。
@@ -71,6 +81,8 @@
 ### E. Routine Insert / Daily Note Auto Insert
 - `Insert Routine` コマンドで当日 `due` のルーチンを挿入。
 - デイリーノート作成時、マーカー検出で自動展開（`vault.on('create')` + 短時間リトライ）。
+- 実験中: 外部生成ノート共存のため、起動時/デイリーノート open 時にも **今日のノートのみ** 後追い確認。
+- 安全策として、マーカー必須・展開済みスタンプ付きで二重展開を抑制。
 - 対応マーカー:
   - `{{llr-today}}`
   - `{{llr-routines}}`

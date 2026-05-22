@@ -47,8 +47,7 @@ export class SummaryView extends ItemView {
         SummaryView.routineFolder = normalized || 'routine';
     }
 
-    // eslint-disable-next-line @typescript-eslint/require-await -- ItemView.onOpen contract requires Promise<void>
-    async onOpen(): Promise<void> {
+    onOpen(): Promise<void> {
         const container = this.contentEl;
         container.empty();
         container.addClass('llr-summary-container');
@@ -79,6 +78,8 @@ export class SummaryView extends ItemView {
                 void this.requestRefresh();
             }
         }));
+
+        return Promise.resolve();
     }
 
     private scheduleRefresh() {
@@ -155,7 +156,7 @@ export class SummaryView extends ItemView {
         requestAnimationFrame(() => {
             const newScrollEl = container.querySelector<HTMLElement>('.llr-list-container');
             if (newScrollEl) {
-                const runningEl = newScrollEl.querySelector<HTMLElement>('.llr-item-running');
+                const runningEl = newScrollEl.querySelector('.llr-item-running');
                 if (this.shouldAutoScrollToRunning()) {
                     if (runningEl) {
                         this.forceScrollRunningItemIntoView(newScrollEl, runningEl);
@@ -236,23 +237,20 @@ export class SummaryView extends ItemView {
         const candidates: string[] = [];
 
         // Core Daily Notes plugin settings (preferred source)
-        type DailyNotesPlugin = { enabled?: boolean; instance?: { options?: Record<string, unknown> } };
-        type AppInternal = {
-            internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | undefined };
-            plugins?: { plugins?: { llr?: { settings?: { workoutFolder?: unknown } } } };
-        };
+        type DailyNotesPlugin = { enabled?: boolean; instance?: { options?: Record<string, unknown>; getDailyNote?: (date: unknown) => TFile | null } };
+        type AppInternal = { internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | null }; plugins?: { plugins?: Record<string, { settings?: Record<string, unknown> }> } };
         const appInternal = this.app as unknown as AppInternal;
         const dailyNotesPlugin = appInternal.internalPlugins?.getPluginById?.('daily-notes');
         if (dailyNotesPlugin?.enabled) {
-            const options = dailyNotesPlugin.instance?.options ?? {};
-            const format = typeof options.format === 'string' ? options.format : 'YYYY-MM-DD';
+            const options = (dailyNotesPlugin.instance?.options ?? {});
+            const format = (typeof options.format === 'string' ? options.format : '') || 'YYYY-MM-DD';
             const folder = (typeof options.folder === 'string' ? options.folder : '').trim();
             const fileName = `${date.format(format)}.md`;
             candidates.push(folder ? `${folder}/${fileName}` : fileName);
         }
 
         // Legacy custom setting fallback (if available)
-        const rawWorkoutFolder = appInternal.plugins?.plugins?.llr?.settings?.workoutFolder;
+        const rawWorkoutFolder = appInternal.plugins?.plugins?.['llr']?.settings?.workoutFolder;
         const workoutFolder = (typeof rawWorkoutFolder === 'string' ? rawWorkoutFolder : '').trim();
         if (workoutFolder) {
             candidates.push(`${workoutFolder}/${date.format('YYYY-MM-DD')}.md`);
@@ -299,7 +297,7 @@ export class SummaryView extends ItemView {
             void this.requestRefresh();
         };
 
-        const todayBtn = navBtns.createEl('div', { cls: 'clickable-icon llr-nav-btn', text: 'TODAY', attr: { 'aria-label': '今日へ移動' } });
+        const todayBtn = navBtns.createEl('div', { cls: 'clickable-icon llr-nav-btn', text: 'Today', attr: { 'aria-label': '今日へ移動' } });
         todayBtn.onclick = () => {
             this.currentDate = moment();
             this.updateTargetFile();
@@ -320,11 +318,11 @@ export class SummaryView extends ItemView {
         const infoRow = navHeader.createEl('div', { cls: 'llr-summary-info' });
 
         const totalBox = infoRow.createEl('div', { cls: 'llr-info-box' });
-        totalBox.createEl('span', { text: 'Est. Total', cls: 'llr-info-label' });
+        totalBox.createEl('span', { text: 'Est total', cls: 'llr-info-label' });
         totalBox.createEl('span', { text: data.header.total, cls: 'llr-info-value' });
 
         const endBox = infoRow.createEl('div', { cls: 'llr-info-box' });
-        endBox.createEl('span', { text: 'Est. Finish', cls: 'llr-info-label' });
+        endBox.createEl('span', { text: 'Est finish', cls: 'llr-info-label' });
         if (data.header.wake) {
             const valueRow = endBox.createEl('span', { cls: 'llr-info-value llr-info-value-inline' });
             valueRow.createSpan({ text: data.header.end });
@@ -360,14 +358,16 @@ export class SummaryView extends ItemView {
     }
 
     private getRoutineSectionDefinitions(): Array<{ value: number; label: string }> {
-        type AppPluginsInternal = { plugins?: { plugins?: { llr?: { settings?: { sectionDefinitions?: unknown } } } } };
-        const raw = (this.app as unknown as AppPluginsInternal).plugins?.plugins?.llr?.settings?.sectionDefinitions ?? [];
+        type AppInternal = { plugins?: { plugins?: Record<string, { settings?: Record<string, unknown> }> } };
+        const appInternal = this.app as unknown as AppInternal;
+        const raw: unknown[] = (appInternal.plugins?.plugins?.['llr']?.settings?.sectionDefinitions ?? []) as unknown[];
         if (!Array.isArray(raw)) return [];
 
         return raw
             .map((x) => {
-                const time = String(x?.time ?? '');
-                const label = String(x?.label ?? '').trim();
+                const rec = (x && typeof x === 'object') ? x as Record<string, unknown> : {};
+                const time = typeof rec.time === 'string' ? rec.time : '';
+                const label = (typeof rec.label === 'string' ? rec.label : '').trim();
                 if (!/^\d{4}$/.test(time) || !label) return null;
                 const hh = Number(time.slice(0, 2));
                 const mm = Number(time.slice(2, 4));
@@ -563,11 +563,8 @@ export class SummaryView extends ItemView {
     }
 
     private async ensureCurrentDateNote(): Promise<TFile | null> {
-        type DailyNotesPlugin = {
-            enabled?: boolean;
-            instance?: { getDailyNote?: (date: unknown) => Promise<TFile> };
-        };
-        type AppInternal = { internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | undefined } };
+        type DailyNotesPlugin = { enabled?: boolean; instance?: { getDailyNote?: (date: unknown, createIfNotExists?: boolean) => Promise<TFile> | TFile | null } };
+        type AppInternal = { internalPlugins?: { getPluginById?: (id: string) => DailyNotesPlugin | null } };
         const dailyNotesPlugin = (this.app as unknown as AppInternal).internalPlugins?.getPluginById?.('daily-notes');
         if (!dailyNotesPlugin?.enabled) {
             new Notice('Enable the core daily notes plugin to open or create daily notes.');

@@ -1,11 +1,14 @@
 import { AbstractInputSuggest, App, Editor, EditorPosition, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, moment, normalizePath } from 'obsidian';
 import { calculateDuration, findLatestCompletionEndTime } from './service/time-calculator';
-import { CheckboxPressIntent, adjustTaskTimeByMinutes, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
-import { RoutineEngine, type RoutineEngineDebugEvent } from './service/routine-engine';
+import { CheckboxPressIntent, adjustTaskTimeByMinutes, prepareCursorBeforeActualStart, getCursorAfterActualEndCh, normalizeCompletedTaskActualDuration, transformCheckboxPress, transformTaskLine } from './service/task-transformer';
+import { RoutineEngine, type RoutineCompletionRequest, type RoutineEngineDebugEvent, type RoutineNote } from './service/routine-engine';
 import { computeStatusBarMetrics } from './service/status-bar-calculator';
 import { parseRepeatExpression, parseScheduleExpression } from './service/yaml-parser';
+import { parseRoutineRescheduleMarker, replaceRoutineRescheduleMarker } from './service/routine-reschedule-marker';
+import { hasPendingRoutineAtDoneMarker, replacePendingRoutineAtDoneMarker } from './service/routine-atdone-marker';
 import { SummaryView, VIEW_TYPE_SUMMARY } from './view/summary-view';
-import { isDailyNoteMatch, resolveDailyNoteDate, resolveReferenceDate, type DailyNoteSettings as DailyNoteSettingsSpec } from './service/daily-note-context';
+import { isDailyNoteMatch, resolveDailyNoteDate, resolveMutationReferenceDate, resolveReferenceDate, type DailyNoteSettings as DailyNoteSettingsSpec } from './service/daily-note-context';
+import { TaskParser } from './service/task-parser';
 
 interface LlrSettings {
     debugModeEnabled: boolean;
@@ -33,6 +36,31 @@ interface DebugRecord {
     data?: unknown;
 }
 
+interface RoutineCompletionSnapshotEntry {
+    totalCount: number;
+    completedCount: number;
+    completedSignatures: Set<string>;
+    atDoneCompletedSignatures: Set<string>;
+}
+
+interface LlrPostActionContext {
+    editor: Editor;
+    view: MarkdownView;
+    file: TFile;
+    reason: string;
+    skipAtDoneLineIndexes?: Set<number>;
+    processedAtDoneCompletions?: Map<string, Set<string>>;
+}
+
+interface LlrPostActionPassResult {
+    kind: 'duration-drift' | 'routine-reschedule-marker' | 'routine-atdone-marker';
+    changedCount: number;
+}
+
+interface ApplyTaskResultOptions {
+    placeCursorBeforeActualStart?: boolean;
+}
+
 const DEFAULT_SETTINGS: LlrSettings = {
     debugModeEnabled: false,
     estimateWarningEnabled: true,
@@ -49,22 +77,19 @@ const DEFAULT_SETTINGS: LlrSettings = {
 
 const TRANSLATIONS = {
     en: {
-        'ribbon.openSummary': 'Open LLR Summary',
-        'ribbon.adjustTime1m': 'Adjust Time (1m)',
-        'command.openSummaryView': 'Open Summary View',
-        'command.toggleTask': 'Toggle Task',
-        'command.adjustTime1m': 'Adjust Time (1m)',
-        'command.fixDurationDriftAll': 'Fix Duration Drift (All Completed Tasks)',
-        'command.retroCompleteTask': 'Retro Complete Task',
-        'command.startTask': 'Start Task (Force)',
-        'command.stopTask': 'Stop Task (Force)',
-        'command.startTaskFromPrev': 'Start Task (Align to Previous Completion)',
-        'command.interruptTask': 'Interrupt Task',
-        'command.resetTaskKeepTime': 'Reset Task (Keep Estimate)',
-        'command.duplicateTask': 'Duplicate Task',
-        'command.skipTaskLogOnly': 'Skip Task (Log Only)',
-        'command.insertRoutine': 'Insert Routine',
-        'settings.language.name': 'UI Language',
+        'ribbon.openSummary': 'Open LLR summary',
+        'ribbon.adjustTime1m': 'Adjust time (1m)',
+        'command.openSummaryView': 'Open summary view',
+        'command.toggleTask': 'Toggle task',
+        'command.adjustTime1m': 'Adjust time (1m)',
+        'command.startTask': 'Start task',
+        'command.stopTask': 'Complete task',
+        'command.startTaskFromPrev': 'Start task at previous time',
+        'command.duplicateTask': 'Duplicate task',
+        'command.skipTaskLogOnly': 'Skip task',
+        'command.rescheduleRoutine': 'Reschedule routine',
+        'command.insertRoutine': 'Insert routine',
+        'settings.language.name': 'UI language',
         'settings.language.desc': 'Choose language for settings and command labels.',
         'settings.language.option.auto': 'Auto (follow system locale)',
         'settings.language.option.ja': 'Japanese',
@@ -72,24 +97,24 @@ const TRANSLATIONS = {
         'settings.language.notice': 'LLR: Language updated. Reload plugin to refresh command names.',
         'settings.debugMode.name': 'Debug mode',
         'settings.debugMode.desc': 'Show command/internal delay timestamps in Notice and log them to llrlog/debug.jsonl. Intended for debugging and troubleshooting.',
-        'settings.estimateWarning.name': 'Estimate Warning',
+        'settings.estimateWarning.name': 'Estimate warning',
         'settings.estimateWarning.desc': 'Show schedule warning cues based on estimated remaining time.',
-        'settings.checkboxOverride.name': 'Editor Checkbox Override',
+        'settings.checkboxOverride.name': 'Editor checkbox override',
         'settings.checkboxOverride.desc': 'Use LLR short-press/long-press behavior for checkboxes in the editor. When off, checkbox clicks use Obsidian default behavior while commands and hotkeys stay available.',
-        'settings.routineFolder.name': 'Routine Folder',
+        'settings.routineFolder.name': 'Routine folder',
         'settings.routineFolder.desc': 'Folder for repeat-task routine notes. You can pick from suggestions. Only direct child .md files are targeted.',
-        'settings.routineSections.heading': 'Routine Sections',
+        'settings.routineSections.heading': 'Routine sections',
         'settings.routineSections.desc': 'Configure heading boundaries for Insert Routine / template auto-insert. A task goes into the latest section whose HHmm boundary is <= task time. Tasks without section stay at the top (no heading).',
         'settings.routineSections.empty': 'No section definitions. All routines are inserted without headings.',
         'settings.routineSections.itemName': 'Section {index}',
         'settings.routineSections.itemDesc': 'Boundary time (HHmm) and heading label',
-        'settings.routineSections.newName': 'New Section',
+        'settings.routineSections.newName': 'New section',
         'settings.routineSections.newDesc': 'Enter HHmm and heading label. When both are set, it is committed and sorted by time.',
         'settings.routineSections.deleteTooltip': 'Delete section',
         'settings.routineSections.addTooltip': 'Add section (when both fields are filled)',
         'settings.routineSections.labelPlaceholder': 'Morning',
         'settings.routineSections.timePlaceholder': '0700',
-        'settings.advanced.heading': 'Advanced / Compatibility',
+        'settings.advanced.heading': 'Advanced / compatibility',
         'settings.advanced.desc': 'Settings for exceptional cases. Most users can leave these as-is.',
         'notice.invalidTime': 'LLR: Please enter time in HHmm format (example: 0700).',
         'notice.emptySectionLabel': 'LLR: Please enter a section label.',
@@ -98,17 +123,14 @@ const TRANSLATIONS = {
         'ribbon.openSummary': 'LLR サマリーを開く',
         'ribbon.adjustTime1m': '時間調整（1分）',
         'command.openSummaryView': 'サマリービューを開く',
-        'command.toggleTask': 'タスク切り替え',
+        'command.toggleTask': 'タスクをトグル',
         'command.adjustTime1m': '時間調整（1分）',
-        'command.fixDurationDriftAll': '実績時間のずれを補正（完了タスク全体）',
-        'command.retroCompleteTask': '後追いで完了',
-        'command.startTask': 'タスク開始（強制）',
-        'command.stopTask': 'タスク停止（強制）',
-        'command.startTaskFromPrev': 'タスク開始（直前完了に合わせる）',
-        'command.interruptTask': 'タスク中断',
-        'command.resetTaskKeepTime': 'タスクをリセット（見積維持）',
+        'command.startTask': 'タスク開始',
+        'command.stopTask': 'タスク完了',
+        'command.startTaskFromPrev': '前の時刻で開始',
         'command.duplicateTask': 'タスク複製',
-        'command.skipTaskLogOnly': 'タスクをスキップ（ログのみ）',
+        'command.skipTaskLogOnly': 'タスクをスキップ',
+        'command.rescheduleRoutine': 'ルーチンを先送り',
         'command.insertRoutine': 'ルーチンを挿入',
         'settings.language.name': 'UI言語',
         'settings.language.desc': '設定画面とコマンド名の表示言語を選びます。',
@@ -171,6 +193,7 @@ const DAILY_ROUTINE_TEMPLATE_MARKERS = [
     '{{llr-routines}}',
     '<!-- llr:insert-routine -->',
 ] as const;
+const DAILY_ROUTINE_EXPANDED_STAMP_PREFIX = '<!-- llr:routines-expanded ';
 const LEGACY_SKIP_COMMAND_ID = 'defer-task-to-tomorrow';
 const SKIP_COMMAND_ID = 'skip-task-log-only';
 const DEFAULT_ROUTINE_FOLDER = 'routine';
@@ -190,8 +213,9 @@ function normalizeSectionDefinitions(input: unknown): SectionDefinition[] {
     const normalized: SectionDefinition[] = [];
     for (const item of input) {
         if (!item || typeof item !== 'object') continue;
-        const rawTime = String((item).time ?? '').replace(/[^\d]/g, '').slice(0, 4);
-        const label = String((item).label ?? '').trim();
+        const rec = item as Record<string, unknown>;
+        const rawTime = (typeof rec.time === 'string' ? rec.time : '').replace(/[^\d]/g, '').slice(0, 4);
+        const label = (typeof rec.label === 'string' ? rec.label : '').trim();
         if (!label) continue;
         if (parseSectionTimeToInt(rawTime) === null) continue;
         normalized.push({ time: rawTime, label });
@@ -229,7 +253,7 @@ export default class LlrPlugin extends Plugin {
     private scheduleValidationTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
     private lastScheduleValidationError: Map<string, string> = new Map();
     private metadataChangedTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-    private routineCompletionSnapshotByFile: Map<string, Map<string, { totalCount: number; completedCount: number }>> = new Map();
+    private routineCompletionSnapshotByFile: Map<string, Map<string, RoutineCompletionSnapshotEntry>> = new Map();
     private dailyNoteAutoInsertTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
     private refreshTimer: ReturnType<typeof setInterval> | null = null;
     private debugFolderEnsured = false;
@@ -296,13 +320,23 @@ export default class LlrPlugin extends Plugin {
         this.registerEvent(
             this.app.vault.on('create', (file) => {
                 if (file instanceof TFile) {
-                    this.scheduleDailyNoteRoutineAutoInsert(file);
+                    this.scheduleDailyNoteRoutineAutoInsert(file, 0, 'create');
+                }
+            })
+        );
+        this.registerEvent(
+            this.app.workspace.on('file-open', (file) => {
+                if (file instanceof TFile) {
+                    this.scheduleDailyNoteRoutineAutoInsert(file, 0, 'open');
                 }
             })
         );
         this.registerEvent(
             this.app.metadataCache.on('changed', (file) => this.scheduleMetadataChangedProcessing(file))
         );
+        this.app.workspace.onLayoutReady(() => {
+            void this.tryAutoInsertTodayDailyNoteOnStartup();
+        });
         // Checkbox override + long-press support
         this.registerDomEvent(document, 'pointerdown', (ev) => this.handlePointerDown(ev));
         this.registerDomEvent(document, 'pointerup', (ev) => this.handlePointerUp(ev));
@@ -312,10 +346,10 @@ export default class LlrPlugin extends Plugin {
         });
         // Cursor movement tracking (click or key navigation)
         this.registerDomEvent(document, 'click', (ev) => this.handleDocumentClick(ev), true);
-        this.registerDomEvent(document, 'beforeinput', (ev) => this.handleDocumentBeforeInput(ev), true);
-        this.registerDomEvent(document, 'input', (ev) => this.handleDocumentInput(ev as InputEvent), true);
-        this.registerDomEvent(document, 'compositionstart', (ev) => this.handleDocumentCompositionEvent('compositionstart', ev), true);
-        this.registerDomEvent(document, 'compositionend', (ev) => this.handleDocumentCompositionEvent('compositionend', ev), true);
+        this.registerDomEvent(document, 'beforeinput', (ev) => { if (ev instanceof InputEvent) this.handleDocumentBeforeInput(ev); }, true);
+        this.registerDomEvent(document, 'input', (ev) => { if (ev instanceof InputEvent) this.handleDocumentInput(ev); }, true);
+        this.registerDomEvent(document, 'compositionstart', (ev) => { if (ev instanceof CompositionEvent) this.handleDocumentCompositionEvent('compositionstart', ev); }, true);
+        this.registerDomEvent(document, 'compositionend', (ev) => { if (ev instanceof CompositionEvent) this.handleDocumentCompositionEvent('compositionend', ev); }, true);
         this.registerDomEvent(document, 'keyup', () => this.updateUI());
         // Initial update
         this.scheduleUIUpdate();
@@ -362,30 +396,6 @@ export default class LlrPlugin extends Plugin {
         });
 
         this.addCommand({
-            id: 'fix-duration-drift-all',
-            name: this.t('command.fixDurationDriftAll'),
-            icon: 'wrench',
-            editorCallback: (editor: Editor, view: MarkdownView) => {
-                void this.runCommandWithDebug('fix-duration-drift-all', this.t('command.fixDurationDriftAll'), () => {
-                    this.debugLog('Command: Fix Duration Drift (All Completed Tasks)');
-                    this.handleFixDurationDriftAll(editor, view);
-                });
-            }
-        });
-
-        this.addCommand({
-            id: 'retro-complete-task',
-            name: this.t('command.retroCompleteTask'),
-            icon: 'stamp',
-            editorCallback: (editor: Editor, view: MarkdownView) => {
-                void this.runCommandWithDebug('retro-complete-task', this.t('command.retroCompleteTask'), async () => {
-                    this.debugLog('Command: Retro Complete Task');
-                    await this.handleToggleTask(editor, view, 'retroComplete');
-                });
-            }
-        });
-
-        this.addCommand({
             id: 'start-task',
             name: this.t('command.startTask'),
             icon: 'play',
@@ -422,30 +432,6 @@ export default class LlrPlugin extends Plugin {
         });
 
         this.addCommand({
-            id: 'interrupt-task',
-            name: this.t('command.interruptTask'),
-            icon: 'pause',
-            editorCallback: (editor: Editor, view: MarkdownView) => {
-                void this.runCommandWithDebug('interrupt-task', this.t('command.interruptTask'), async () => {
-                    this.debugLog('Command: Interrupt Task');
-                    await this.handleToggleTask(editor, view, 'interrupt');
-                });
-            }
-        });
-
-        this.addCommand({
-            id: 'reset-task-keep-time',
-            name: this.t('command.resetTaskKeepTime'),
-            icon: 'undo-2',
-            editorCallback: (editor: Editor, view: MarkdownView) => {
-                void this.runCommandWithDebug('reset-task-keep-time', this.t('command.resetTaskKeepTime'), async () => {
-                    this.debugLog('Command: Reset Task (Keep Estimate)');
-                    await this.handleResetTaskKeepTime(editor, view);
-                });
-            }
-        });
-
-        this.addCommand({
             id: 'duplicate-task',
             name: this.t('command.duplicateTask'),
             icon: 'copy',
@@ -470,6 +456,18 @@ export default class LlrPlugin extends Plugin {
         });
 
         this.addCommand({
+            id: 'reschedule-routine',
+            name: this.t('command.rescheduleRoutine'),
+            icon: 'calendar-clock',
+            editorCallback: (editor: Editor, view: MarkdownView) => {
+                void this.runCommandWithDebug('reschedule-routine', this.t('command.rescheduleRoutine'), async () => {
+                    this.debugLog('Command: Reschedule Routine');
+                    await this.handleRescheduleRoutine(editor, view);
+                });
+            }
+        });
+
+        this.addCommand({
             id: 'insert-routine',
             name: this.t('command.insertRoutine'),
             icon: 'calendar-plus',
@@ -485,26 +483,27 @@ export default class LlrPlugin extends Plugin {
     }
 
     private migrateLegacySkipCommandHotkeys(): void {
-        const hotkeyManager = (this.app as unknown as AppInternal)?.hotkeyManager as Record<string, unknown> | undefined;
+        const hotkeyManager = (this.app as Record<string, unknown>)?.hotkeyManager;
         if (!hotkeyManager || typeof hotkeyManager !== 'object') return;
-        if (typeof hotkeyManager.setHotkeys !== 'function' || typeof hotkeyManager.removeHotkeys !== 'function') return;
+        const hm = hotkeyManager as Record<string, unknown>;
+        if (typeof hm.setHotkeys !== 'function' || typeof hm.removeHotkeys !== 'function') return;
 
         const oldCommandId = `${this.manifest.id}:${LEGACY_SKIP_COMMAND_ID}`;
         const newCommandId = `${this.manifest.id}:${SKIP_COMMAND_ID}`;
-        const customKeys = hotkeyManager.customKeys as Record<string, unknown> | undefined;
+        const customKeys = hm.customKeys as Record<string, unknown> | undefined;
         const oldKeys = customKeys?.[oldCommandId];
         const newKeys = customKeys?.[newCommandId];
         const oldHasKeys = Array.isArray(oldKeys) && oldKeys.length > 0;
         const newHasKeys = Array.isArray(newKeys) && newKeys.length > 0;
 
         if (oldHasKeys && !newHasKeys) {
-            hotkeyManager.setHotkeys(newCommandId, oldKeys);
+            (hm.setHotkeys as (id: string, keys: unknown) => void)(newCommandId, oldKeys);
         }
         if (oldHasKeys || customKeys?.[oldCommandId] != null) {
-            hotkeyManager.removeHotkeys(oldCommandId);
+            (hm.removeHotkeys as (id: string) => void)(oldCommandId);
         }
-        if ((oldHasKeys || customKeys?.[oldCommandId] != null) && typeof hotkeyManager.save === 'function') {
-            hotkeyManager.save();
+        if ((oldHasKeys || customKeys?.[oldCommandId] != null) && typeof hm.save === 'function') {
+            (hm.save as () => void)();
             this.debugLog('Migrated legacy command hotkeys', {
                 from: oldCommandId,
                 to: newCommandId,
@@ -522,15 +521,15 @@ export default class LlrPlugin extends Plugin {
     }
 
     async loadSettings(): Promise<void> {
-        const loaded = await this.loadData();
-        const merged = { ...DEFAULT_SETTINGS, ...(loaded ?? {}) } as LlrSettings;
-        merged.checkboxOverrideEnabled = Boolean((loaded)?.checkboxOverrideEnabled ?? merged.checkboxOverrideEnabled);
-        merged.mobileLargeCheckboxEnabled = Boolean((loaded)?.mobileLargeCheckboxEnabled ?? merged.mobileLargeCheckboxEnabled);
-        merged.uiLanguage = ((loaded)?.uiLanguage === 'ja' || (loaded)?.uiLanguage === 'en')
-            ? (loaded).uiLanguage
+        const loaded: Record<string, unknown> | null = await this.loadData();
+        const merged: LlrSettings = { ...DEFAULT_SETTINGS, ...(loaded ?? {}) };
+        merged.checkboxOverrideEnabled = Boolean(loaded?.checkboxOverrideEnabled ?? merged.checkboxOverrideEnabled);
+        merged.mobileLargeCheckboxEnabled = Boolean(loaded?.mobileLargeCheckboxEnabled ?? merged.mobileLargeCheckboxEnabled);
+        merged.uiLanguage = (loaded?.uiLanguage === 'ja' || loaded?.uiLanguage === 'en')
+            ? loaded.uiLanguage
             : 'auto';
-        merged.routineFolder = normalizeRoutineFolder((loaded)?.routineFolder ?? merged.routineFolder);
-        merged.sectionDefinitions = normalizeSectionDefinitions((loaded)?.sectionDefinitions ?? merged.sectionDefinitions);
+        merged.routineFolder = normalizeRoutineFolder(loaded?.routineFolder ?? merged.routineFolder);
+        merged.sectionDefinitions = normalizeSectionDefinitions(loaded?.sectionDefinitions ?? merged.sectionDefinitions);
         this.settings = merged;
     }
 
@@ -840,9 +839,8 @@ export default class LlrPlugin extends Plugin {
             void workspace.revealLeaf(leaf);
             // モバイル環境でサイドバーが閉じている場合に確実に開く
             if (Platform.isMobile) {
-                const ws = this.app.workspace as unknown as WorkspaceInternal;
-                ws.leftSplit?.collapse?.(); // 左は閉じる（任意）
-                ws.rightSplit?.expand?.();
+                (this.app.workspace as unknown as { leftSplit?: { collapse?: () => void } }).leftSplit?.collapse?.(); // 左は閉じる（任意）
+                (this.app.workspace as unknown as { rightSplit?: { expand?: () => void } }).rightSplit?.expand?.();
             }
         }
     }
@@ -1207,7 +1205,10 @@ export default class LlrPlugin extends Plugin {
             resultPreview: result.content.slice(0, 120),
         });
 
-        await this.applyTaskResult(editor, view, targetLine, lineText, result);
+        await this.applyTaskResult(editor, view, targetLine, lineText, result, {
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
+        });
+        await this.runPostLlrActionAdjustments(editor, view, 'checkbox press');
         this.scheduleUIUpdate();
     }
 
@@ -1282,7 +1283,7 @@ export default class LlrPlugin extends Plugin {
 
         // Strategy 2: CodeMirror 6 API
         const cmView = this.getCM6View(editor);
-        const offsetToPos = (editor as unknown as EditorInternal)?.offsetToPos;
+        const offsetToPos = (editor as unknown as Record<string, unknown>)?.offsetToPos;
 
         if (cmView && typeof offsetToPos === 'function') {
             // a) Coordinate-based
@@ -1365,14 +1366,14 @@ export default class LlrPlugin extends Plugin {
     }
 
     private getDailyNoteSettings(): DailyNoteSettingsSpec {
-        const dailyNotesPlugin = (this.app as unknown as AppInternal).internalPlugins?.getPluginById?.('daily-notes');
-        const options = dailyNotesPlugin?.instance?.options ?? {};
-        const format = typeof options.format === 'string' && options.format ? options.format : 'YYYY-MM-DD';
-        const folder = typeof options.folder === 'string' ? options.folder : '';
+        type InternalPlugins = { getPluginById?: (id: string) => { enabled?: boolean; instance?: { options?: Record<string, unknown> } } | null };
+        const internalPlugins = (this.app as unknown as { internalPlugins?: InternalPlugins }).internalPlugins;
+        const dailyNotesPlugin = internalPlugins?.getPluginById?.('daily-notes');
+        const options = (dailyNotesPlugin?.instance?.options ?? {});
         return {
             enabled: !!dailyNotesPlugin?.enabled,
-            format,
-            folder,
+            format: (typeof options.format === 'string' ? options.format : '') || 'YYYY-MM-DD',
+            folder: typeof options.folder === 'string' ? options.folder : '',
         };
     }
 
@@ -1385,19 +1386,69 @@ export default class LlrPlugin extends Plugin {
         if (!this.isDailyNoteFile(file)) return;
         if (this.routineCompletionSnapshotByFile.has(file.path)) return;
 
+        void this.primeRoutineCompletionSnapshotAsync(file);
+    }
+
+    private primeRoutineCompletionSnapshotAsync(file: TFile): void {
         const snapshot = this.buildRoutineCompletionSnapshot(file);
         if (!snapshot) return;
-
         this.routineCompletionSnapshotByFile.set(file.path, snapshot);
     }
 
-    private buildRoutineCompletionSnapshot(file: TFile): Map<string, { totalCount: number; completedCount: number }> | null {
+    private getActiveEditorContentForFile(file: TFile): string | null {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file || view.file.path !== file.path) return null;
+        return view.editor.getValue();
+    }
+
+    private hasPendingAtDoneMarker(lineText: string): boolean {
+        return hasPendingRoutineAtDoneMarker(lineText);
+    }
+
+    private createEmptyRoutineCompletionSnapshotEntry(): RoutineCompletionSnapshotEntry {
+        return {
+            totalCount: 0,
+            completedCount: 0,
+            completedSignatures: new Set<string>(),
+            atDoneCompletedSignatures: new Set<string>(),
+        };
+    }
+
+    private buildRoutineCompletionSignature(lineNumber: number, lineText: string): string {
+        const normalized = lineText.trim();
+        return normalized ? `${lineNumber}:${normalized}` : `${lineNumber}:__completed__`;
+    }
+
+    private wasLinePreviouslyCompletedForRoutine(file: TFile, routinePath: string, lineIndex: number): boolean {
+        const snapshot = this.routineCompletionSnapshotByFile.get(file.path);
+        const entry = snapshot?.get(routinePath);
+        if (!entry) return false;
+
+        const prefix = `${lineIndex}:`;
+        for (const signature of entry.completedSignatures) {
+            if (signature.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    private shouldApplyAtDoneToRoutine(routineNote: RoutineNote | null, completionDate: Date): routineNote is RoutineNote {
+        if (!routineNote?.next_due) return false;
+
+        const leadDays = routineNote.start_before ?? 0;
+        if (leadDays <= 0) return false;
+
+        const completionDay = moment(completionDate).format('YYYY-MM-DD');
+        const visibleFrom = moment(routineNote.next_due).subtract(leadDays, 'days').format('YYYY-MM-DD');
+        return completionDay >= visibleFrom && completionDay <= routineNote.next_due;
+    }
+
+    private buildRoutineCompletionSnapshot(file: TFile): Map<string, RoutineCompletionSnapshotEntry> | null {
         const cache = this.app.metadataCache.getFileCache(file);
         if (!cache || !cache.listItems) {
             return null;
         }
 
-        const currentSnapshot = new Map<string, { totalCount: number; completedCount: number }>();
+        const currentSnapshot = new Map<string, RoutineCompletionSnapshotEntry>();
         const listItems = [...cache.listItems]
             .filter((item) => typeof item.task === 'string')
             .sort((a, b) =>
@@ -1412,6 +1463,9 @@ export default class LlrPlugin extends Plugin {
         if (listItems.length === 0 || links.length === 0) {
             return currentSnapshot;
         }
+
+        const activeContent = this.getActiveEditorContentForFile(file);
+        const lines = activeContent?.split('\n') ?? null;
 
         let linkCursor = 0;
         const resolvedRoutineCache = new Map<string, TFile | null>();
@@ -1445,11 +1499,22 @@ export default class LlrPlugin extends Plugin {
                 seenRoutinePathsInItem.add(routineFile.path);
 
                 const isComplete = item.task === 'x';
-                const prevCounts = currentSnapshot.get(routineFile.path) ?? { totalCount: 0, completedCount: 0 };
-                currentSnapshot.set(routineFile.path, {
-                    totalCount: prevCounts.totalCount + 1,
-                    completedCount: prevCounts.completedCount + (isComplete ? 1 : 0),
-                });
+                const lineNumber = item.position.start.line;
+                const lineText = lines?.[lineNumber] ?? '';
+                const signature = isComplete ? this.buildRoutineCompletionSignature(lineNumber, lineText) : null;
+                const hasAtDone = isComplete && lineText.length > 0 && this.hasPendingAtDoneMarker(lineText);
+                const entry = currentSnapshot.get(routineFile.path) ?? this.createEmptyRoutineCompletionSnapshotEntry();
+                entry.totalCount += 1;
+                if (isComplete) {
+                    entry.completedCount += 1;
+                    if (signature) {
+                        entry.completedSignatures.add(signature);
+                    }
+                    if (hasAtDone && signature) {
+                        entry.atDoneCompletedSignatures.add(signature);
+                    }
+                }
+                currentSnapshot.set(routineFile.path, entry);
             }
         }
 
@@ -1482,8 +1547,9 @@ export default class LlrPlugin extends Plugin {
         return selected ? `# ${selected.label}` : null;
     }
 
-    private scheduleDailyNoteRoutineAutoInsert(file: TFile, attempt = 0): void {
+    private scheduleDailyNoteRoutineAutoInsert(file: TFile, attempt = 0, trigger: 'create' | 'open' | 'startup' = 'create'): void {
         if (!this.isDailyNoteFile(file)) return;
+        if (!this.shouldAttemptDeferredDailyRoutineInsert(file, trigger)) return;
         if (attempt > 12) {
             this.dailyNoteAutoInsertTimers.delete(file.path);
             return;
@@ -1493,27 +1559,66 @@ export default class LlrPlugin extends Plugin {
         if (existing) clearTimeout(existing);
 
         const timer = setTimeout(() => {
-            void this.tryAutoInsertRoutinesFromTemplateMarker(file, attempt);
+            void this.tryAutoInsertRoutinesFromTemplateMarker(file, attempt, trigger);
         }, attempt === 0 ? 200 : 500);
 
         this.dailyNoteAutoInsertTimers.set(file.path, timer);
     }
 
-    private async tryAutoInsertRoutinesFromTemplateMarker(file: TFile, attempt: number): Promise<void> {
+    private tryAutoInsertTodayDailyNoteOnStartup(): void {
+        const file = this.resolveTodayDailyNoteFile();
+        if (!file) return;
+        this.scheduleDailyNoteRoutineAutoInsert(file, 0, 'startup');
+    }
+
+    private resolveTodayDailyNoteFile(): TFile | null {
+        const settings = this.getDailyNoteSettings();
+        if (!settings.enabled) return null;
+
+        const basename = moment().format(settings.format.trim());
+        const path = settings.folder.trim() ? `${settings.folder.trim()}/${basename}.md` : `${basename}.md`;
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? file : null;
+    }
+
+    private shouldAttemptDeferredDailyRoutineInsert(file: TFile, trigger: 'create' | 'open' | 'startup'): boolean {
+        if (trigger === 'create') return true;
+
+        const fileDate = this.parseDailyNoteDate(file);
+        if (!fileDate) return false;
+
+        const today = moment().format('YYYY-MM-DD');
+        const target = moment(fileDate).format('YYYY-MM-DD');
+        return target === today;
+    }
+
+    private buildDailyRoutineExpandedStamp(targetDate: Date): string {
+        return `${DAILY_ROUTINE_EXPANDED_STAMP_PREFIX}${moment(targetDate).format('YYYY-MM-DD')} -->`;
+    }
+
+    private async tryAutoInsertRoutinesFromTemplateMarker(
+        file: TFile,
+        attempt: number,
+        trigger: 'create' | 'open' | 'startup'
+    ): Promise<void> {
         try {
             if (!this.isDailyNoteFile(file)) return;
 
             const content = await this.app.vault.read(file);
+            if (content.includes(DAILY_ROUTINE_EXPANDED_STAMP_PREFIX)) return;
             const hasMarker = DAILY_ROUTINE_TEMPLATE_MARKERS.some((marker) => content.includes(marker));
             if (!hasMarker) {
                 // Templater may populate the content after create; retry for a short window.
-                this.scheduleDailyNoteRoutineAutoInsert(file, attempt + 1);
+                if (trigger === 'create') {
+                    this.scheduleDailyNoteRoutineAutoInsert(file, attempt + 1, trigger);
+                }
                 return;
             }
 
             const targetDate = this.parseDailyNoteDate(file) ?? new Date();
             const outputLines = await this.buildRoutineInsertLines(targetDate);
-            const block = outputLines.join('\n');
+            const stamp = this.buildDailyRoutineExpandedStamp(targetDate);
+            const block = [...outputLines, stamp].join('\n');
 
             let replaced = content;
             for (const marker of DAILY_ROUTINE_TEMPLATE_MARKERS) {
@@ -1528,12 +1633,14 @@ export default class LlrPlugin extends Plugin {
                     date: targetDate.toISOString(),
                     lineCount: outputLines.length,
                     attempt,
+                    trigger,
                 });
             }
         } catch (error) {
             this.debugLog('Daily template routine auto-insert failed', {
                 file: file.path,
                 attempt,
+                trigger,
                 error: error instanceof Error ? error.message : String(error),
             });
         } finally {
@@ -1541,19 +1648,9 @@ export default class LlrPlugin extends Plugin {
         }
     }
 
-    private getCM6View(editor: Editor): CM6View | null {
-        const raw = editor as unknown as Record<string, unknown>;
-        const cm = raw.cm as Record<string, unknown> | undefined;
-        const editorChain = raw.editor as Record<string, unknown> | undefined;
-        const editorCm = editorChain?.cm as Record<string, unknown> | undefined;
-        return (
-            (cm?.cm as CM6View | undefined) ??
-            (cm as CM6View | undefined) ??
-            (raw.cmEditor as CM6View | undefined) ??
-            ((editorCm?.cm as Record<string, unknown> | undefined)?.view as CM6View | undefined) ??
-            (editorCm as CM6View | undefined) ??
-            null
-        );
+    private getCM6View(editor: Editor): Record<string, unknown> | null {
+        const raw = editor as unknown as Record<string, Record<string, unknown>>;
+        return raw.cm?.cm ?? raw.cm ?? raw.cmEditor ?? raw.editor?.cm?.cm?.view ?? raw.editor?.cm ?? null;
     }
 
     private triggerHaptic(isLongPress: boolean): void {
@@ -1616,6 +1713,18 @@ export default class LlrPlugin extends Plugin {
             return;
         }
 
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const processedAtDoneCompletions = new Map<string, Set<string>>();
+        if (activeView?.file?.path === file.path) {
+            await this.processPendingRoutineAtDoneMarkersInEditor({
+                editor: activeView.editor,
+                view: activeView,
+                file,
+                reason: 'metadata-changed',
+                processedAtDoneCompletions,
+            });
+        }
+
         const currentSnapshot = this.buildRoutineCompletionSnapshot(file);
         if (!currentSnapshot) {
             this.routineCompletionSnapshotByFile.delete(file.path);
@@ -1643,8 +1752,8 @@ export default class LlrPlugin extends Plugin {
         ]);
 
         for (const routinePath of routinePaths) {
-            const current = currentSnapshot.get(routinePath) ?? { totalCount: 0, completedCount: 0 };
-            const prev = previousSnapshot.get(routinePath) ?? { totalCount: 0, completedCount: 0 };
+            const current = currentSnapshot.get(routinePath) ?? this.createEmptyRoutineCompletionSnapshotEntry();
+            const prev = previousSnapshot.get(routinePath) ?? this.createEmptyRoutineCompletionSnapshotEntry();
 
             if (prev.completedCount === current.completedCount) {
                 continue;
@@ -1654,7 +1763,22 @@ export default class LlrPlugin extends Plugin {
             if (!(routineFile instanceof TFile)) continue;
 
             const completionDelta = current.completedCount - prev.completedCount;
-            const completionBaseDate = resolveReferenceDate(this.parseDailyNoteDate(file), new Date());
+            const completionBaseDate = resolveMutationReferenceDate(this.parseDailyNoteDate(file), new Date());
+            const suppressedCompletedSignatures = processedAtDoneCompletions.get(routinePath) ?? new Set<string>();
+            const addedCompletedSignatures = completionDelta > 0
+                ? [...current.completedSignatures]
+                    .filter((signature) => !prev.completedSignatures.has(signature))
+                    .filter((signature) => !suppressedCompletedSignatures.has(signature))
+                : [];
+            const hasAtDoneCompletion = addedCompletedSignatures.some((signature) =>
+                current.atDoneCompletedSignatures.has(signature)
+            );
+            const completionRequest: RoutineCompletionRequest | null = addedCompletedSignatures.length > 0
+                ? {
+                    completionDate: completionBaseDate,
+                    mode: hasAtDoneCompletion ? 'advanceFromDue' : 'normal',
+                }
+                : null;
             this.debugLog('Routine completion state changed', {
                 file: file.path,
                 routinePath,
@@ -1665,13 +1789,16 @@ export default class LlrPlugin extends Plugin {
                     to: current.completedCount,
                     delta: completionDelta,
                 },
+                suppressedCompletedSignatures: [...suppressedCompletedSignatures],
+                addedCompletedSignatures,
+                completionMode: completionRequest?.mode ?? null,
             });
 
             // Trigger engine only when the count of completed items changes.
             this.routineEngine.scheduleUpdate(
                 routineFile,
                 file.path,
-                completionDelta > 0 ? completionBaseDate : null
+                completionRequest
             );
         }
     }
@@ -1782,17 +1909,21 @@ export default class LlrPlugin extends Plugin {
             return;
         }
 
-        await this.applyTaskResult(editor, view, cursor.line, lineText, result);
-        const driftFixCount = this.fixDurationDriftAcrossEditor(editor);
-        if (driftFixCount > 0) {
-            this.debugLog('Auto fixed duration drift after toggle', { driftFixCount });
-        }
+        const shouldSkipAtDoneOnCurrentLine = forceAction === 'start'
+            || (!forceAction && lineText.trim().startsWith('- [ ]'));
+
+        await this.applyTaskResult(editor, view, cursor.line, lineText, result, {
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
+        });
+        await this.runPostLlrActionAdjustments(editor, view, 'toggle task', {
+            skipAtDoneLineIndexes: shouldSkipAtDoneOnCurrentLine ? new Set([cursor.line]) : undefined,
+        });
     }
 
     private resolveDefaultToggleDelegatedAction(lineText: string): 'taskify' | 'complete' | 'duplicate' | undefined {
         const trimmed = lineText.trim();
         if (!trimmed) return undefined;
-        if (!/^- \[( |\/|x)\]/.test(trimmed)) return 'taskify';
+        if (!/^- \[[ /x]\]/.test(trimmed)) return 'taskify';
         if (trimmed.startsWith('- [/]')) return 'complete';
         if (trimmed.startsWith('- [x]')) return 'duplicate';
         return undefined;
@@ -1824,7 +1955,12 @@ export default class LlrPlugin extends Plugin {
             unstartedLongPressStartTime: startTime,
         });
         if (!result) return;
-        await this.applyTaskResult(editor, view, cursor.line, lineText, result);
+        await this.applyTaskResult(editor, view, cursor.line, lineText, result, {
+            placeCursorBeforeActualStart: this.shouldPlaceCursorBeforeActualStart(lineText, result),
+        });
+        await this.runPostLlrActionAdjustments(editor, view, 'start task from previous completion', {
+            skipAtDoneLineIndexes: new Set([cursor.line]),
+        });
     }
 
     async handleResetTaskKeepTime(editor: Editor, view: MarkdownView): Promise<void> {
@@ -1841,6 +1977,7 @@ export default class LlrPlugin extends Plugin {
         const result = transformCheckboxPress(lineText, new Date(), 'long');
         if (!result) return;
         await this.applyTaskResult(editor, view, cursor.line, lineText, result);
+        await this.runPostLlrActionAdjustments(editor, view, 'reset task keep time');
     }
 
     async handleAdjustTime(editor: Editor, view: MarkdownView, deltaMinutes: number): Promise<void> {
@@ -1860,19 +1997,34 @@ export default class LlrPlugin extends Plugin {
             after: result.content,
         });
         await this.applyTaskResult(editor, view, cursor.line, lineText, result);
+        await this.runPostLlrActionAdjustments(editor, view, 'adjust time');
     }
 
     handleFixDurationDriftAll(editor: Editor, view: MarkdownView): void {
         if (!this.ensureDailyNoteView(view, 'Fix Duration Drift (All Completed Tasks)')) return;
+        if (!view.file) return;
 
         const changedCount = this.fixDurationDriftAcrossEditor(editor);
+        const atDoneCount = await this.processPendingRoutineAtDoneMarkersInEditor({
+            editor,
+            view,
+            file: view.file,
+            reason: 'fix-duration-drift-all',
+        });
+        const markerCount = await this.processPendingRoutineRescheduleMarkersInEditor({
+            editor,
+            view,
+            file: view.file,
+            reason: 'fix-duration-drift-all',
+        });
 
-        this.debugLog('Fix duration drift (all) done', { changedCount });
+        this.debugLog('Fix duration drift (all) done', { changedCount, atDoneCount, markerCount });
         this.showLlrNotice(`LLR: 実績時間のズレを ${changedCount} 行修正しました。`);
     }
 
     private fixDurationDriftAcrossEditor(editor: Editor): number {
         let changedCount = 0;
+        const cursor = editor.getCursor();
         const lastLine = editor.lastLine();
         for (let line = 0; line <= lastLine; line++) {
             const current = editor.getLine(line);
@@ -1881,10 +2033,51 @@ export default class LlrPlugin extends Plugin {
             editor.replaceRange(normalized, { line, ch: 0 }, { line, ch: current.length });
             changedCount++;
         }
+        if (changedCount > 0) {
+            const cursorLine = Math.min(cursor.line, editor.lastLine());
+            const cursorCh = Math.min(cursor.ch, editor.getLine(cursorLine).length);
+            editor.setCursor({ line: cursorLine, ch: cursorCh });
+        }
         return changedCount;
     }
 
-    handleDeferTaskToTomorrow(editor: Editor, view: MarkdownView): void {
+    private async runPostLlrActionAdjustments(
+        editor: Editor,
+        view: MarkdownView,
+        reason: string,
+        options: { skipAtDoneLineIndexes?: Set<number> } = {}
+    ): Promise<void> {
+        const file = view.file;
+        if (!file) return;
+
+        const context: LlrPostActionContext = { editor, view, file, reason, skipAtDoneLineIndexes: options.skipAtDoneLineIndexes };
+        const results: LlrPostActionPassResult[] = [
+            {
+                kind: 'routine-atdone-marker',
+                changedCount: await this.processPendingRoutineAtDoneMarkersInEditor(context),
+            },
+            {
+                kind: 'duration-drift',
+                changedCount: this.fixDurationDriftAcrossEditor(editor),
+            },
+            {
+                kind: 'routine-reschedule-marker',
+                changedCount: await this.processPendingRoutineRescheduleMarkersInEditor(context),
+            },
+        ];
+
+        for (const result of results) {
+            if (result.changedCount <= 0) continue;
+            this.debugLog('Post LLR action pass applied', {
+                reason,
+                pass: result.kind,
+                changedCount: result.changedCount,
+                file: file.path,
+            });
+        }
+    }
+
+    async handleDeferTaskToTomorrow(editor: Editor, view: MarkdownView): Promise<void> {
         if (!this.ensureDailyNoteView(view, 'Skip Task (Log Only)')) return;
 
         const cursor = editor.getCursor();
@@ -1899,6 +2092,7 @@ export default class LlrPlugin extends Plugin {
                 lineIndex,
                 skipLine,
             });
+            await this.runPostLlrActionAdjustments(editor, view, 'skip-task-log-only');
             return;
         }
 
@@ -1924,6 +2118,151 @@ export default class LlrPlugin extends Plugin {
         return lineText.replace(/^- skip:\s*/i, '- [ ] ');
     }
 
+    private isRoutineRescheduleEligibleLine(lineText: string): boolean {
+        const trimmed = lineText.trim();
+        return /^- \[[ /x]\]/.test(trimmed) || /^- skip:\s*/i.test(trimmed);
+    }
+
+    private isRoutineAtDoneEligibleLine(lineText: string): boolean {
+        return this.isRoutineRescheduleEligibleLine(lineText);
+    }
+
+    private async processPendingRoutineAtDoneMarkersInEditor(context: LlrPostActionContext): Promise<number> {
+        const { editor, view, file, reason } = context;
+        if (!this.ensureDailyNoteView(view, '@done')) return 0;
+        if (this.isFutureDailyNoteFile(file)) return 0;
+
+        let processedCount = 0;
+        const completionBaseDate = resolveMutationReferenceDate(this.parseDailyNoteDate(file), new Date());
+
+        for (let lineIndex = 0; lineIndex <= editor.lastLine(); lineIndex++) {
+            const lineText = editor.getLine(lineIndex);
+            if (context.skipAtDoneLineIndexes?.has(lineIndex)) continue;
+            if (!this.isRoutineAtDoneEligibleLine(lineText)) continue;
+            if (!hasPendingRoutineAtDoneMarker(lineText)) continue;
+
+            const routineFile = this.resolveSingleRoutineFileForLine(lineText, file.path);
+            if (!routineFile) continue;
+
+            const routineNote = this.routineEngine.readRoutineNote(routineFile);
+            if (!this.shouldApplyAtDoneToRoutine(routineNote, completionBaseDate)) continue;
+
+            const updatedLine = replacePendingRoutineAtDoneMarker(lineText);
+            if (!updatedLine) continue;
+
+            await this.routineEngine.processCompletion(routineNote, completionBaseDate, { mode: 'advanceFromDue' });
+
+            if (context.processedAtDoneCompletions && TaskParser.parseLine(lineText).status === 'x') {
+                const signature = this.buildRoutineCompletionSignature(lineIndex, updatedLine);
+                const signatures = context.processedAtDoneCompletions.get(routineFile.path) ?? new Set<string>();
+                signatures.add(signature);
+                context.processedAtDoneCompletions.set(routineFile.path, signatures);
+            }
+
+            editor.replaceRange(updatedLine, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
+            processedCount += 1;
+            this.debugLog('Routine @done marker applied', {
+                reason,
+                file: file.path,
+                lineIndex,
+                routinePath: routineFile.path,
+                completionBaseDate: completionBaseDate.toISOString(),
+                originalLine: lineText,
+                updatedLine,
+            });
+        }
+
+        return processedCount;
+    }
+
+    private async processPendingRoutineRescheduleMarkersInEditor(context: LlrPostActionContext): Promise<number> {
+        const { editor, view, file, reason } = context;
+        if (!this.ensureDailyNoteView(view, 'Reschedule Routine')) return 0;
+        if (this.isFutureDailyNoteFile(file)) return 0;
+
+        let processedCount = 0;
+        const baseDate = new Date();
+        baseDate.setHours(0, 0, 0, 0);
+
+        for (let lineIndex = 0; lineIndex <= editor.lastLine(); lineIndex++) {
+            const lineText = editor.getLine(lineIndex);
+            if (!this.isRoutineRescheduleEligibleLine(lineText)) continue;
+
+            const marker = parseRoutineRescheduleMarker(lineText, baseDate);
+            if (!marker) continue;
+
+            const routineFile = this.resolveSingleRoutineFileForLine(lineText, file.path);
+            if (!routineFile) continue;
+
+            const routineNote = this.routineEngine.readRoutineNote(routineFile);
+            if (!routineNote) continue;
+
+            if (routineNote.next_due !== marker.canonicalDate) {
+                await this.routineEngine.updateNextDue(routineFile, { nextDue: marker.canonicalDate });
+            }
+
+            const updatedLine = replaceRoutineRescheduleMarker(lineText, marker);
+            editor.replaceRange(updatedLine, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
+            processedCount += 1;
+            this.debugLog('Routine reschedule marker applied', {
+                reason,
+                file: file.path,
+                lineIndex,
+                routinePath: routineFile.path,
+                nextDue: marker.canonicalDate,
+                originalLine: lineText,
+                updatedLine,
+            });
+        }
+
+        return processedCount;
+    }
+
+    private isFutureDailyNoteFile(file: TFile): boolean {
+        const noteDate = this.parseDailyNoteDate(file);
+        if (!noteDate) return false;
+
+        const normalizedNote = new Date(noteDate);
+        normalizedNote.setHours(0, 0, 0, 0);
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return normalizedNote.getTime() > today.getTime();
+    }
+
+    private resolveSingleRoutineFileForLine(lineText: string, sourcePath: string): TFile | null {
+        const linkTexts = this.routineEngine.extractLinkTexts(lineText);
+        const resolved = linkTexts
+            .map((linkText) => this.routineEngine.resolveRoutineFile(linkText, sourcePath))
+            .filter((file): file is TFile => file instanceof TFile);
+
+        const uniqueByPath = [...new Map(resolved.map((file) => [file.path, file])).values()];
+        if (uniqueByPath.length !== 1) return null;
+        return uniqueByPath[0];
+    }
+
+    async handleRescheduleRoutine(editor: Editor, view: MarkdownView): Promise<void> {
+        if (!this.ensureDailyNoteView(view, 'Reschedule Routine')) return;
+        if (!view.file) return;
+
+        if (this.isFutureDailyNoteFile(view.file)) {
+            this.showLlrNotice('LLR: 未来日のデイリーノートではルーチン先送りを実行しません。');
+            return;
+        }
+
+        const processedCount = await this.processPendingRoutineRescheduleMarkersInEditor({
+            editor,
+            view,
+            file: view.file,
+            reason: 'reschedule-routine-command',
+        });
+        if (processedCount === 0) {
+            this.showLlrNotice('LLR: このページで処理できる routine の @日付 は見つかりませんでした。');
+            return;
+        }
+        this.showLlrNotice(`LLR: routine の先送りを ${processedCount} 件反映しました。`);
+    }
+
     private removeEditorLine(editor: Editor, lineIndex: number, lineText: string): void {
         const lastLine = editor.lastLine();
         if (lastLine === 0) {
@@ -1943,28 +2282,42 @@ export default class LlrPlugin extends Plugin {
         editor.setCursor(previousLine, editor.getLine(previousLine).length);
     }
 
+    private shouldPlaceCursorBeforeActualStart(
+        previousLineText: string,
+        result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string }
+    ): boolean {
+        if (result.type !== 'update' && result.type !== 'insert') return false;
+        return !previousLineText.startsWith('- [/]') && result.content.startsWith('- [/]');
+    }
+
+    // eslint-disable-next-line @typescript-eslint/require-await -- Multiple callers await this in async chains; body is sync today but the Promise contract is preserved
     private async applyTaskResult(
         editor: Editor,
         view: MarkdownView,
         lineIndex: number,
         lineText: string,
-        result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string }
+        result: { type: 'update' | 'insert' | 'complete' | 'interrupt' | 'none'; content: string; extraContent?: string },
+        options: ApplyTaskResultOptions = {}
     ): Promise<void> {
+        const { content: effectiveContent, ch: nextCursorCh } = options.placeCursorBeforeActualStart
+            ? prepareCursorBeforeActualStart(result.content)
+            : { content: result.content, ch: result.content.length };
+
         switch (result.type) {
             case 'update':
-                editor.replaceRange(result.content, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
-                editor.setCursor(lineIndex, result.content.length);
-                this.debugLog('Task updated', { content: result.content });
+                editor.replaceRange(effectiveContent, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
+                editor.setCursor(lineIndex, nextCursorCh);
+                this.debugLog('Task updated', { content: effectiveContent });
                 // No manual call needed here anymore, onMetadataChanged will catch it
                 break;
             case 'insert':
-                editor.replaceRange('\n' + result.content, { line: lineIndex, ch: lineText.length });
-                editor.setCursor(lineIndex + 1, result.content.length);
-                this.debugLog('New task inserted', { content: result.content });
+                editor.replaceRange('\n' + effectiveContent, { line: lineIndex, ch: lineText.length });
+                editor.setCursor(lineIndex + 1, nextCursorCh);
+                this.debugLog('New task inserted', { content: effectiveContent });
                 break;
             case 'complete':
                 this.debugLog('Action: Complete (via transformer signal)');
-                await this.completeTask(editor, view, lineIndex, lineText);
+                this.completeTask(editor, view, lineIndex, lineText);
                 break;
             case 'interrupt': {
                 editor.replaceRange(result.content, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
@@ -1985,19 +2338,18 @@ export default class LlrPlugin extends Plugin {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/require-await -- Kept async so applyTaskResult's await chain stays valid; body has no awaits today but logical Promise contract preserved
-    async completeTask(editor: Editor, view: MarkdownView, lineIndex: number, lineText: string): Promise<void> {
+    completeTask(editor: Editor, view: MarkdownView, lineIndex: number, lineText: string) {
         const now = new Date();
         const endTimeStr = this.formatTime(now);
 
-        // Regex to find start time: - [/] HH:mm ...
-        const match = lineText.match(/- \[\/\]\s*(\d{2}:\d{2})/);
-        if (!match) {
-            this.debugLog('Complete failed: No start time found in line', { lineText });
+        const parsed = TaskParser.parseLine(lineText);
+        const startTimeStr = parsed.status === '/' ? parsed.actualStart : undefined;
+        if (!startTimeStr) {
+            this.debugLog('Complete failed: No running start time found in line', { lineText, parsed });
             this.showLlrNotice('LLR: Start time not found.');
             return;
         }
-        const startTimeStr = match[1];
+
         const duration = calculateDuration(startTimeStr, endTimeStr);
 
         this.debugLog('Completing Task...', {
@@ -2008,31 +2360,23 @@ export default class LlrPlugin extends Plugin {
             duration
         });
 
-        // ALLタイムスタンプ、ダッシュ、経過時間（括弧）等のゴミを根こそぎ消す正規表現
-        const cleanupRegex = /(\d{2}:\d{2}\s*(-|>)?\s*|\(\d+m( > \d+m)?\)\s*)+/g;
-        let content = lineText.replace(/^- \[\/\]\s*\d{2}:\d{2}(?:\s*-\s*)?/, '').trim();
-        content = content.replace(cleanupRegex, '').trim();
-
-        // オリジナルのテキストから、変更前の「見積もり」を抽出（XXm > YYm の形式も考慮）
-        const estimateMatch = lineText.match(/\(([^)]+)m\)/);
-        let timeInfo = `(${duration}m)`;
-
-        if (estimateMatch) {
-            // (30m > 45m) のような場合、最初の 30 を見積もりとして採用
-            const estimate = estimateMatch[1].split('>')[0].trim();
-            if (estimate !== duration.toString()) {
-                timeInfo = `(${estimate}m > ${duration}m)`;
-            }
-        }
-
         const indentMatch = lineText.match(/^(\s*)/);
         const indent = indentMatch ? indentMatch[1] : '';
-        const taskSuffix = content.trim();
-        const newLine = `${indent}- [x] ${startTimeStr} - ${endTimeStr} ${timeInfo}${taskSuffix ? ` ${taskSuffix}` : ''}`;
+        const newLine = `${indent}${TaskParser.serialize({
+            ...parsed,
+            body: parsed.body,
+            status: 'x',
+            actualStart: startTimeStr,
+            actualEnd: endTimeStr,
+            estimate: parsed.estimate ? parsed.estimate.split('>')[0].trim() : '',
+            actualDuration: `${duration}m`,
+            marker: null,
+            times: [startTimeStr, endTimeStr],
+        })}`;
 
         // setLine よりも replaceRange の方が Live Preview のウィジェット更新がかかりやすい
         editor.replaceRange(newLine, { line: lineIndex, ch: 0 }, { line: lineIndex, ch: lineText.length });
-        editor.setCursor(lineIndex, newLine.length);
+        editor.setCursor(lineIndex, getCursorAfterActualEndCh(newLine, endTimeStr));
 
         // Force CM6 widget re-render (needed when triggered from click handler)
         requestAnimationFrame(() => {
@@ -2047,8 +2391,9 @@ export default class LlrPlugin extends Plugin {
     }
 
 
+    // eslint-disable-next-line @typescript-eslint/require-await -- Callers await in async chains; body is sync today but the Promise contract is preserved
     private async buildRoutineInsertLines(targetDate: Date): Promise<string[]> {
-        const dueRoutines = await this.routineEngine.fetchDueRoutines(targetDate);
+        const dueRoutines = this.routineEngine.fetchDueRoutines(targetDate);
 
         if (dueRoutines.length === 0) {
             return [];
@@ -2274,8 +2619,11 @@ class LlrSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName(this.plugin.t('settings.routineSections.heading'))
-            .setDesc(this.plugin.t('settings.routineSections.desc'))
             .setHeading();
+        containerEl.createEl('p', {
+            text: this.plugin.t('settings.routineSections.desc'),
+            cls: 'setting-item-description',
+        });
 
         const listContainer = containerEl.createDiv('llr-section-settings-list');
         this.renderSectionDefinitionSettings(listContainer);
@@ -2350,10 +2698,9 @@ class LlrSettingTab extends PluginSettingTab {
                 .addExtraButton((btn) => btn
                     .setIcon('trash')
                     .setTooltip(this.plugin.t('settings.routineSections.deleteTooltip'))
-                    .onClick(async () => {
+                    .onClick(() => {
                         defs.splice(index, 1);
-                        await this.plugin.setSectionDefinitions(defs);
-                        this.display();
+                        void this.plugin.setSectionDefinitions(defs).then(() => { this.display(); });
                     }));
         });
     }
@@ -2415,8 +2762,11 @@ class LlrSettingTab extends PluginSettingTab {
     private renderAdvancedSettings(containerEl: HTMLElement): void {
         new Setting(containerEl)
             .setName(this.plugin.t('settings.advanced.heading'))
-            .setDesc(this.plugin.t('settings.advanced.desc'))
             .setHeading();
+        containerEl.createEl('p', {
+            text: this.plugin.t('settings.advanced.desc'),
+            cls: 'setting-item-description',
+        });
 
         new Setting(containerEl)
             .setName(this.plugin.t('settings.debugMode.name'))
