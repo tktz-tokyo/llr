@@ -429,13 +429,14 @@ body.is-mobile.llr-mobile-large-checkbox .markdown-source-view.mod-cm6 .HyperMD-
 }
 
 /* モバイル向け：行自体は詰めつつ、タップエリアは確保 */
-.is-mobile .llr-row-top,
-.is-mobile .llr-row-bottom {
+.is-mobile .llr-row-top {
     height: auto !important;
     min-height: 32px !important;
 }
 
 .is-mobile .llr-row-bottom {
+    height: auto !important;
+    min-height: 32px !important;
     margin-top: -4px !important;
     /* 上の行（時刻・バー）に引き寄せる */
 }
@@ -568,9 +569,6 @@ body.is-mobile.llr-mobile-large-checkbox .markdown-source-view.mod-cm6 .HyperMD-
     opacity: 0.96 !important;
     font-weight: normal !important;
     text-decoration: none !important;
-}
-
-.llr-item-done .llr-task-name {
     color: var(--text-normal) !important;
 }
 
