@@ -1,5 +1,7 @@
 # LLR Docs Index
 
+> **For non-Japanese readers / AI assistants:** Most files in this folder are written in Japanese. Modern LLMs (Claude, GPT-4o, Gemini, etc.) translate transparently — feel free to drop the whole folder into a chat and ask in English. Start with [`specs/STATE_実装状況サマリー.md`](specs/STATE_実装状況サマリー.md) for the current implementation overview, or [`specs/今回のバージョンについて.md`](specs/今回のバージョンについて.md) for what changed in the latest release.
+
 Obsidian 上の LLR プラグインの公開ドキュメント入口。
 このファイルを最初の参照点にする。
 
