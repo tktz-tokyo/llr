@@ -46,6 +46,8 @@
 - `repeat`（および旧 `schedule` / `frequency`）が未設定のノートを完了した場合:
   - `repeat: 1`（毎日）を自動付与
   - `next_due` を翌日に設定
+- 0.2.0 以降: `repeat` 未設定 + `next_due` なしのノートも `Insert Routine` の今日候補として毎日表示する。
+  - 明示的に表示を止めたい場合は `repeat: none` を設定する。
 
 詳細は [[ルーチンエンジン仕様]] を参照。
 
@@ -76,8 +78,10 @@
     - ゴミ出し、曜日固定、月次固定などの予定向け。
 - 未指定時の既定:
   - `repeat: none/no/0` -> `true`
-  - `every ... from completion`、旧 `after` / `every` -> `true`
+  - 旧オブジェクト形式の `after` / `every` -> `true`
+  - `every ... from completion` -> `false`（0.2.0 で変更。stride 単位で `next_due` を進めて表示する）
   - `every ... from due`、曜日固定、月次固定、年次固定、旧 `daily/weekly/monthly/nth_day/yearly` -> `false`
+  - 完了起点で「未完了の間は毎日出し続けたい」場合は `rollover: true` を明示する。
 
 ## 6. `section` と見出し分類
 - `section` は `HHmm` を表す数値（例: `700`, `1245`, `1830`）。

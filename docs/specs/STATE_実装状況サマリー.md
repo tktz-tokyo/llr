@@ -1,6 +1,7 @@
 # Implementation Summary (Current)
 
 現状の実装済み機能と、未実装項目の明示サマリー。
+**現行リリースの変更点と注意点は [[今回のバージョンについて]] を参照。**
 
 ## 1. Implemented
 
@@ -147,6 +148,14 @@
 
 ## 4. Recent Milestones (抜粋)
 
+### 2026-05-22: v0.2.0 release
+- trial/current の仕様変更込みで main に merge。詳細は [[今回のバージョンについて]] を参照。
+- `every X days from completion` の `rollover` 既定を `false` に変更。
+- `repeat` 未指定 + `next_due` なしも毎日表示候補に追加。
+- 一回限り due routine、routine-atdone-marker、routine-reschedule-marker、未来日ガード強化。
+- v2 task grammar の整理と STATUS_PATTERN 修正、iOS デバッグ Notice の defer 化。
+
+
 ### 2026-03-05: Pre-release hardening
 - 完了行トグル時の順序を安定化（duration drift 補正 -> 見積再計算 -> duplicate）。
 - `Fix Duration Drift (All Completed Tasks)` コマンドで全完了行の duration を一括補正可能に。
@@ -180,4 +189,4 @@
 - 実行中タスクへの自動スクロールを改善。
 
 ---
-最終更新: 2026-03-05
+最終更新: 2026-05-22
