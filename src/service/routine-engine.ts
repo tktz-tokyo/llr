@@ -9,7 +9,7 @@
  */
 
 import { App, TFile } from 'obsidian';
-import { calculateNextDue, fromDateString, normalizeRepeatExpression, toDateString, type Frequency, usesDueAnchor } from './yaml-parser';
+import { calculateNextDue, fromDateString, normalizeRepeatExpression, toDateString, type Frequency, usesCompletionAnchor, usesDueAnchor } from './yaml-parser';
 import { parseCutoffMinutes } from './day-cutoff';
 
 const DEFAULT_ROUTINE_FOLDER = 'routine';
@@ -280,7 +280,7 @@ export class RoutineEngine {
             case 'every':
                 return true;
             case 'schedule':
-                return !usesDueAnchor(frequency);
+                return !usesDueAnchor(frequency) && !usesCompletionAnchor(frequency);
             case 'daily':
             case 'weekly':
             case 'monthly':

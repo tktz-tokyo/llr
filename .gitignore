@@ -8,6 +8,7 @@ coverage/
 .obsidian/
 AGENTS.md
 CLAUDE.md
+.claude/worktrees/
 /main.js
 *.tmp
 *.bak
