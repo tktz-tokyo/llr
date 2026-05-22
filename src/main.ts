@@ -450,7 +450,7 @@ export default class LlrPlugin extends Plugin {
             editorCallback: (editor: Editor, view: MarkdownView) => {
                 void this.runCommandWithDebug(SKIP_COMMAND_ID, this.t('command.skipTaskLogOnly'), () => {
                     this.debugLog('Command: Skip Task (Log Only)');
-                    this.handleDeferTaskToTomorrow(editor, view);
+                    void this.handleDeferTaskToTomorrow(editor, view);
                 });
             }
         });
@@ -1706,7 +1706,7 @@ export default class LlrPlugin extends Plugin {
         this.metadataChangedTimers.set(file.path, timer);
     }
 
-    private onMetadataChanged(file: TFile): void {
+    private async onMetadataChanged(file: TFile): Promise<void> {
         if (file.extension !== 'md') return;
         if (!this.isDailyNoteFile(file)) {
             this.routineCompletionSnapshotByFile.delete(file.path);
@@ -2000,7 +2000,7 @@ export default class LlrPlugin extends Plugin {
         await this.runPostLlrActionAdjustments(editor, view, 'adjust time');
     }
 
-    handleFixDurationDriftAll(editor: Editor, view: MarkdownView): void {
+    async handleFixDurationDriftAll(editor: Editor, view: MarkdownView): Promise<void> {
         if (!this.ensureDailyNoteView(view, 'Fix Duration Drift (All Completed Tasks)')) return;
         if (!view.file) return;
 
