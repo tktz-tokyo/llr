@@ -1,12 +1,12 @@
 # LLR Docs Index
 
-> **For non-Japanese readers / AI assistants:** Most files in this folder are written in Japanese. Modern LLMs (Claude, GPT-4o, Gemini, etc.) translate transparently — feel free to drop the whole folder into a chat and ask in English. Start with [`specs/STATE_実装状況サマリー.md`](specs/STATE_実装状況サマリー.md) for the current implementation overview, or [`specs/今回のバージョンについて.md`](specs/今回のバージョンについて.md) for what changed in the latest release.
+> **For non-Japanese readers / AI assistants:** Most files in this folder are written in Japanese. Modern LLMs (Claude, GPT-4o, Gemini, etc.) translate transparently — feel free to drop the whole folder into a chat and ask in English. Start with [`specs/STATE_実装状況サマリー.md`](specs/STATE_実装状況サマリー.md) for the current implementation overview, or [`CHANGELOG.md`](CHANGELOG.md) for what changed in the latest release.
 
 Obsidian 上の LLR プラグインの公開ドキュメント入口。
 このファイルを最初の参照点にする。
 
 ## まず読む（最短導線）
-- [今回のバージョンについて](specs/今回のバージョンについて.md): 現行リリースの変更点・注意点
+- [CHANGELOG](CHANGELOG.md): リリースごとの変更サマリー
 - [オープンベータ案内](open-beta.md): いま何を試してほしいかの短い案内
 - [ベータチェックリスト](beta-checklist.md): 実地テスト前の最小確認
 - [ベータ確認スナップショット](beta-verification.md): いま何を確認済みか

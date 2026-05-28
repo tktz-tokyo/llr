@@ -1,7 +1,7 @@
 # Implementation Summary (Current)
 
 現状の実装済み機能と、未実装項目の明示サマリー。
-**現行リリースの変更点と注意点は [[今回のバージョンについて]] を参照。**
+現行リリースの変更点と注意点は [[CHANGELOG]] を参照。
 
 ## 1. Implemented
 
@@ -148,9 +148,11 @@
 
 ## 4. Recent Milestones (抜粋)
 
+### 2026-05-28: v0.2.1 bugfix
+- `every X days from completion` の `rollover` 既定を `true` に修正（0.2.0 で誤って `false` にしていた）。詳細は [[CHANGELOG]] を参照。
+
 ### 2026-05-22: v0.2.0 release
-- trial/current の仕様変更込みで main に merge。詳細は [[今回のバージョンについて]] を参照。
-- `every X days from completion` の `rollover` 既定を `false` に変更。
+- trial/current の仕様変更込みで main に merge。詳細は [[CHANGELOG]] を参照。
 - `repeat` 未指定 + `next_due` なしも毎日表示候補に追加。
 - 一回限り due routine、routine-atdone-marker、routine-reschedule-marker、未来日ガード強化。
 - v2 task grammar の整理と STATUS_PATTERN 修正、iOS デバッグ Notice の defer 化。
