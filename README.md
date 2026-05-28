@@ -158,8 +158,6 @@ Register `Toggle Task` in Obsidian's **Mobile Toolbar** (the icon row above the 
 - Haptic feedback included; long-press absorbs the subsequent click to avoid double-firing
 - Enable `Large Mobile Checkboxes` in settings for a bigger tap target
 
-<!-- TODO: assets/llr-mobile-longpress.gif — long-press gesture on mobile -->
-
 ---
 
 ## Status Bar
