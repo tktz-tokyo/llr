@@ -280,7 +280,9 @@ export class RoutineEngine {
             case 'every':
                 return true;
             case 'schedule':
-                return !usesDueAnchor(frequency) && !usesCompletionAnchor(frequency);
+                // completion-anchored: show every day until done (like legacy 'after'/'every')
+                // due-anchored or neither: catch up to next scheduled occurrence
+                return usesCompletionAnchor(frequency);
             case 'daily':
             case 'weekly':
             case 'monthly':

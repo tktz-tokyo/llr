@@ -422,7 +422,7 @@ describe('RoutineEngine', () => {
             expect(results[0].file.path).toBe('routines/repeat/today.md');
         });
 
-        it('catches up overdue completion-anchored routines for preview only and shows them only when due today', async () => {
+        it('shows overdue completion-anchored routines every day until completed (rollover)', async () => {
             const routineFile = makeFile('routine/sticky.md');
             mockApp.vault.getFolderByPath.mockReturnValue({ children: [routineFile] });
             mockApp.metadataCache.getFileCache.mockReturnValue({
@@ -433,12 +433,14 @@ describe('RoutineEngine', () => {
             });
             const updateSpy = vi.spyOn(engine, 'updateNextDue').mockResolvedValue();
 
+            // 2 days overdue: still shows (rollover enabled for completion-anchored)
             const results = await engine.fetchDueRoutines(new Date('2026-02-27T12:00:00'));
             expect(updateSpy).not.toHaveBeenCalled();
-            expect(results).toHaveLength(0);
+            expect(results).toHaveLength(1);
+            expect(results[0].file.path).toBe('routine/sticky.md');
         });
 
-        it('shows overdue completion-anchored routines after preview catch-up when the normalized due date is today', async () => {
+        it('shows overdue completion-anchored routines every day until completed (another day)', async () => {
             const routineFile = makeFile('routine/sticky-today.md');
             mockApp.vault.getFolderByPath.mockReturnValue({ children: [routineFile] });
             mockApp.metadataCache.getFileCache.mockReturnValue({
@@ -449,11 +451,11 @@ describe('RoutineEngine', () => {
             });
             const updateSpy = vi.spyOn(engine, 'updateNextDue').mockResolvedValue();
 
+            // 3 days overdue: still shows (rollover, displayDue rolled to today)
             const results = await engine.fetchDueRoutines(new Date('2026-02-28T12:00:00'));
             expect(updateSpy).not.toHaveBeenCalled();
             expect(results).toHaveLength(1);
             expect(results[0].file.path).toBe('routine/sticky-today.md');
-            expect(results[0].next_due).toBe('2026-02-28');
         });
 
         it('treats repeat none as sticky when next_due remains in the past', async () => {
