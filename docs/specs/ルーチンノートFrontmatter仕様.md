@@ -85,9 +85,9 @@
 - 未指定時の既定:
   - `repeat: none/no/0` -> `true`
   - 旧オブジェクト形式の `after` / `every` -> `true`
-  - `every ... from completion` -> `false`（0.2.0 で変更。stride 単位で `next_due` を進めて表示する）
+  - `every ... from completion`（`5日後` 等）-> `true`（完了するまで毎日表示、完了日から再計算）
   - `every ... from due`、曜日固定、月次固定、年次固定、旧 `daily/weekly/monthly/nth_day/yearly` -> `false`
-  - 完了起点で「未完了の間は毎日出し続けたい」場合は `rollover: true` を明示する。
+  - due 起点で「未完了でも毎日出し続けたい」場合は `rollover: true` を明示する。
 
 ## 6. `section` と見出し分類
 - `section` は `HHmm` を表す数値（例: `700`, `1245`, `1830`）。
@@ -142,14 +142,16 @@ next_due: 2026-02-27
 ---
 ```
 
-### 8.5 完了するまで毎日残したい重要ルーチン
+### 8.5 完了起点ルーチン（`5日後` / `from completion`）
 ```yaml
 ---
-repeat: every 3 days from completion
-rollover: true
+repeat: 5日後
 next_due: 2026-02-27
 ---
 ```
+デフォルトで rollover=true。未完了なら毎日表示し続け、完了した日から 5 日後を次の `next_due` に設定する。
+
+due 固定にしたい場合（「X 日ごとに必ず来る」スケジュール型）は `rollover: false` を明示する。
 
 ### 8.6 睡眠タスク（サイドバー特別扱い）
 ```yaml
