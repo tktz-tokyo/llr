@@ -17,6 +17,7 @@ interface LlrSettings {
     mobileLargeCheckboxEnabled: boolean;
     uiLanguage: UILanguage;
     routineFolder: string;
+    routineSectionHeadingLevel: number;
     sectionDefinitions: SectionDefinition[];
 }
 
@@ -68,6 +69,7 @@ const DEFAULT_SETTINGS: LlrSettings = {
     mobileLargeCheckboxEnabled: false,
     uiLanguage: 'auto',
     routineFolder: 'routine',
+    routineSectionHeadingLevel: 3,
     sectionDefinitions: [
         { time: '0700', label: '午前' },
         { time: '1200', label: '午後' },
@@ -103,6 +105,15 @@ const TRANSLATIONS = {
         'settings.checkboxOverride.desc': 'Use LLR short-press/long-press behavior for checkboxes in the editor. When off, checkbox clicks use Obsidian default behavior while commands and hotkeys stay available.',
         'settings.routineFolder.name': 'Routine folder',
         'settings.routineFolder.desc': 'Folder for repeat-task routine notes. You can pick from suggestions. Only direct child .md files are targeted.',
+        'settings.routineSectionHeadingLevel.name': 'Routine section heading level',
+        'settings.routineSectionHeadingLevel.desc': 'Choose the heading level used when inserting routine sections.',
+        'settings.routineSectionHeadingLevel.option.none': 'None',
+        'settings.routineSectionHeadingLevel.option.h1': 'H1',
+        'settings.routineSectionHeadingLevel.option.h2': 'H2',
+        'settings.routineSectionHeadingLevel.option.h3': 'H3',
+        'settings.routineSectionHeadingLevel.option.h4': 'H4',
+        'settings.routineSectionHeadingLevel.option.h5': 'H5',
+        'settings.routineSectionHeadingLevel.option.h6': 'H6',
         'settings.routineSections.heading': 'Routine sections',
         'settings.routineSections.desc': 'Configure heading boundaries for Insert Routine / template auto-insert. A task goes into the latest section whose HHmm boundary is <= task time. Tasks without section stay at the top (no heading).',
         'settings.routineSections.empty': 'No section definitions. All routines are inserted without headings.',
@@ -146,6 +157,15 @@ const TRANSLATIONS = {
         'settings.checkboxOverride.desc': '編集画面のチェックボックスに LLR の短押し・長押し挙動を使います。OFF にするとクリックは Obsidian 標準に戻り、コマンドとショートカットはそのまま使えます。',
         'settings.routineFolder.name': 'ルーチンフォルダ',
         'settings.routineFolder.desc': 'リピートタスク（ルーチンノート）を置くフォルダ。候補から選択できます。対象はこのフォルダ直下の .md のみです。',
+        'settings.routineSectionHeadingLevel.name': 'ルーチンセクションの見出しレベル',
+        'settings.routineSectionHeadingLevel.desc': 'ルーチン挿入時に使う見出しレベルを選びます。',
+        'settings.routineSectionHeadingLevel.option.none': 'なし',
+        'settings.routineSectionHeadingLevel.option.h1': 'H1',
+        'settings.routineSectionHeadingLevel.option.h2': 'H2',
+        'settings.routineSectionHeadingLevel.option.h3': 'H3',
+        'settings.routineSectionHeadingLevel.option.h4': 'H4',
+        'settings.routineSectionHeadingLevel.option.h5': 'H5',
+        'settings.routineSectionHeadingLevel.option.h6': 'H6',
         'settings.routineSections.heading': 'ルーチンセクション',
         'settings.routineSections.desc': 'Insert Routine / テンプレート自動挿入の見出し区切りを設定します。section（HHmm）が各時刻以上になったらその見出しに入ります。未設定のタスクは先頭（見出しなし）です。',
         'settings.routineSections.empty': 'セクション設定がありません。すべて見出しなしで書き出されます。',
@@ -234,6 +254,14 @@ function normalizeRoutineFolder(value: unknown): string {
     const asText = typeof value === 'string' ? value : '';
     const normalizedPath = normalizePath(asText.trim()).replace(/^\/+/, '').replace(/\/+$/, '');
     return normalizedPath || DEFAULT_ROUTINE_FOLDER;
+}
+
+function normalizeRoutineSectionHeadingLevel(value: unknown): number {
+    if (value === 0 || value === '0') return 0;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed)) return DEFAULT_SETTINGS.routineSectionHeadingLevel;
+    if (parsed < 1 || parsed > 6) return DEFAULT_SETTINGS.routineSectionHeadingLevel;
+    return parsed;
 }
 
 export default class LlrPlugin extends Plugin {
@@ -530,6 +558,9 @@ export default class LlrPlugin extends Plugin {
             : 'auto';
         merged.routineFolder = normalizeRoutineFolder(loaded?.routineFolder ?? merged.routineFolder);
         merged.sectionDefinitions = normalizeSectionDefinitions(loaded?.sectionDefinitions ?? merged.sectionDefinitions);
+        merged.routineSectionHeadingLevel = normalizeRoutineSectionHeadingLevel(
+            loaded?.routineSectionHeadingLevel ?? merged.routineSectionHeadingLevel
+        );
         this.settings = merged;
     }
 
@@ -588,6 +619,10 @@ export default class LlrPlugin extends Plugin {
         return this.settings.sectionDefinitions.map((x) => ({ ...x }));
     }
 
+    getRoutineSectionHeadingLevel(): number {
+        return normalizeRoutineSectionHeadingLevel(this.settings.routineSectionHeadingLevel);
+    }
+
     async setDebugModeEnabled(enabled: boolean): Promise<void> {
         this.settings.debugModeEnabled = enabled;
         await this.saveSettings();
@@ -620,6 +655,14 @@ export default class LlrPlugin extends Plugin {
         this.settings.sectionDefinitions = normalizeSectionDefinitions(definitions);
         await this.saveSettings();
         this.debugLog('Section definitions updated', { sectionDefinitions: this.settings.sectionDefinitions });
+    }
+
+    async setRoutineSectionHeadingLevel(level: unknown): Promise<void> {
+        const normalized = normalizeRoutineSectionHeadingLevel(level);
+        if (normalized === this.settings.routineSectionHeadingLevel) return;
+        this.settings.routineSectionHeadingLevel = normalized;
+        await this.saveSettings();
+        this.debugLog('Routine section heading level updated', { routineSectionHeadingLevel: normalized });
     }
 
     async setRoutineFolder(folder: string): Promise<void> {
@@ -1533,6 +1576,8 @@ export default class LlrPlugin extends Plugin {
 
     private getRoutineSectionHeading(section: number | undefined): string | null {
         if (typeof section !== 'number' || !Number.isFinite(section)) return null;
+        const headingLevel = this.getRoutineSectionHeadingLevel();
+        if (headingLevel === 0) return null;
         const boundaries = this.getSortedSectionBoundaries();
         if (boundaries.length === 0) return null;
 
@@ -1544,7 +1589,7 @@ export default class LlrPlugin extends Plugin {
             }
             break;
         }
-        return selected ? `# ${selected.label}` : null;
+        return selected ? `${'#'.repeat(headingLevel)} ${selected.label}` : null;
     }
 
     private scheduleDailyNoteRoutineAutoInsert(file: TFile, attempt = 0, trigger: 'create' | 'open' | 'startup' = 'create'): void {
@@ -2615,6 +2660,24 @@ class LlrSettingTab extends PluginSettingTab {
                     search.setValue(resolved);
                     void commitRoutineFolder();
                 });
+            });
+
+        new Setting(containerEl)
+            .setName(this.plugin.t('settings.routineSectionHeadingLevel.name'))
+            .setDesc(this.plugin.t('settings.routineSectionHeadingLevel.desc'))
+            .addDropdown((dropdown) => {
+                dropdown
+                    .addOption('0', this.plugin.t('settings.routineSectionHeadingLevel.option.none'))
+                    .addOption('1', this.plugin.t('settings.routineSectionHeadingLevel.option.h1'))
+                    .addOption('2', this.plugin.t('settings.routineSectionHeadingLevel.option.h2'))
+                    .addOption('3', this.plugin.t('settings.routineSectionHeadingLevel.option.h3'))
+                    .addOption('4', this.plugin.t('settings.routineSectionHeadingLevel.option.h4'))
+                    .addOption('5', this.plugin.t('settings.routineSectionHeadingLevel.option.h5'))
+                    .addOption('6', this.plugin.t('settings.routineSectionHeadingLevel.option.h6'))
+                    .setValue(String(this.plugin.getRoutineSectionHeadingLevel()))
+                    .onChange(async (value) => {
+                        await this.plugin.setRoutineSectionHeadingLevel(value);
+                    });
             });
 
         new Setting(containerEl)

@@ -4,6 +4,15 @@
 
 ---
 
+## 0.2.2 (2026-05-29)
+
+### Fork
+
+- Sync `tktz-tokyo/llr` with upstream `0.2.1`.
+- Keep the configurable routine section heading level setting for BRAT builds.
+
+---
+
 ## 0.2.1 (2026-05-28)
 
 ### Bugfix
